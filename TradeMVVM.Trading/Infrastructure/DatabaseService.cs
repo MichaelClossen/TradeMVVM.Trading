@@ -4,12 +4,14 @@ using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Threading;
 using TradeMVVM.Domain;
+using System.Globalization;
+using System.IO;
 
 namespace TradeMVVM.Trading.Services
 {
     public class DatabaseService
     {
-        private readonly string _connection = "Data Source=trading.db";
+        private readonly string _connection;
         private const int DbLockedRetryCount = 5;
         private static readonly TimeSpan LoadByIsinCacheTtl = TimeSpan.FromSeconds(5);
         private static readonly object _initLock = new object();
@@ -78,12 +80,12 @@ namespace TradeMVVM.Trading.Services
                     cmd.Parameters.AddWithValue("@to", to);
                     using (var reader = cmd.ExecuteReader())
                     {
-                        while (reader.Read())
-                        {
-                            var time = reader.IsDBNull(0) ? DateTime.MinValue : reader.GetDateTime(0);
-                            var total = reader.IsDBNull(1) ? 0.0 : reader.GetDouble(1);
-                            list.Add(new Tuple<DateTime, double>(time, total));
-                        }
+                            while (reader.Read())
+                            {
+                                var time = ReadDateTimeSafe(reader, 0);
+                                var total = reader.IsDBNull(1) ? 0.0 : reader.GetDouble(1);
+                                list.Add(new Tuple<DateTime, double>(time, total));
+                            }
                     }
                 }
             }
@@ -151,8 +153,191 @@ namespace TradeMVVM.Trading.Services
                 || (ex.Message?.IndexOf("database is locked", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
+        // Robust helper for reading DateTime values from SQLite which may store
+        // date/time as DATETIME, TEXT (various formats), INTEGER (ticks or unix seconds) or real.
+        private static DateTime? ReadNullableDateTime(System.Data.SQLite.SQLiteDataReader reader, int index)
+        {
+            try
+            {
+                if (reader.IsDBNull(index))
+                    return null;
+
+                var val = reader.GetValue(index);
+                if (val is DateTime dt)
+                    return dt;
+
+                if (val is long l)
+                {
+                    // Heuristic: very large values are ticks, smaller likely unix seconds
+                    if (l > 1000000000000L) // ticks threshold (~year 33658)
+                    {
+                        try { return new DateTime(l); } catch { }
+                    }
+                    try { return DateTimeOffset.FromUnixTimeSeconds(l).DateTime; } catch { }
+                }
+
+                if (val is double d)
+                {
+                    // maybe stored as unix seconds with fractional part
+                    try
+                    {
+                        var seconds = (long)d;
+                        return DateTimeOffset.FromUnixTimeSeconds(seconds).DateTime;
+                    }
+                    catch { }
+                }
+
+                var s = val as string;
+                if (!string.IsNullOrWhiteSpace(s))
+                {
+                    if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal | DateTimeStyles.AdjustToUniversal, out var parsed))
+                        return parsed;
+
+                    if (DateTime.TryParseExact(s, "O", CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out parsed))
+                        return parsed;
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private static DateTime ReadDateTimeSafe(System.Data.SQLite.SQLiteDataReader reader, int index)
+        {
+            var dt = ReadNullableDateTime(reader, index);
+            return dt ?? DateTime.MinValue;
+        }
+
+        private string ComputeConnectionString()
+        {
+            // Prior versions stored trading.db in the app folder or in a 'Data' subfolder.
+            var candidates = new List<string>();
+
+            // 1) current working directory
+            candidates.Add(Path.Combine(Directory.GetCurrentDirectory(), "trading.db"));
+
+            // 2) search upwards from assembly location to repository/project root
+            try
+            {
+                var exe = System.Reflection.Assembly.GetEntryAssembly()?.Location ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (!string.IsNullOrEmpty(exe))
+                {
+                    var dir = Path.GetDirectoryName(exe);
+                    // walk up directories looking for trading.db
+                    var cur = dir;
+                    for (int i = 0; i < 10 && !string.IsNullOrEmpty(cur); i++)
+                    {
+                        candidates.Add(Path.Combine(cur, "trading.db"));
+                        candidates.Add(Path.Combine(cur, "Data", "trading.db"));
+                        var parent = Path.GetDirectoryName(cur);
+                        if (string.IsNullOrEmpty(parent) || parent == cur) break;
+                        cur = parent;
+                    }
+                }
+            }
+            catch { }
+
+            // 3) application data (previous installs may have placed DB here)
+            try { candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TradeMVVM", "trading.db")); } catch { }
+
+            // 3.1) legacy build output folders (net48 etc.) often contain the old DB
+            try
+            {
+                var asm = System.Reflection.Assembly.GetEntryAssembly()?.Location ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
+                var repoDir = Path.GetDirectoryName(asm);
+                if (!string.IsNullOrEmpty(repoDir))
+                {
+                    var root = repoDir;
+                    for (int i = 0; i < 6 && !string.IsNullOrEmpty(root); i++)
+                    {
+                        // candidate: <root>\TradeMVVM.Trading\bin\Debug\net48\trading.db
+                        var candidate = Path.Combine(root, "TradeMVVM.Trading", "bin", "Debug", "net48", "trading.db");
+                        candidates.Add(candidate);
+                        candidate = Path.Combine(root, "TradeMVVM.Trading", "bin", "Debug", "net48", "trading.db");
+                        candidates.Add(candidate);
+
+                        // also check Release
+                        candidate = Path.Combine(root, "TradeMVVM.Trading", "bin", "Release", "net48", "trading.db");
+                        candidates.Add(candidate);
+
+                        var parent = Path.GetDirectoryName(root);
+                        if (string.IsNullOrEmpty(parent) || parent == root) break;
+                        root = parent;
+                    }
+                }
+            }
+            catch { }
+
+            // 4) fallback: current directory file name
+            string chosen = null;
+            foreach (var c in candidates)
+            {
+                try { if (File.Exists(c)) { chosen = c; break; } } catch { }
+            }
+
+            if (chosen == null)
+            {
+                // use working dir by default
+                chosen = Path.Combine(Directory.GetCurrentDirectory(), "trading.db");
+            }
+
+            try { Trace.TraceInformation($"DatabaseService: using DB path {chosen}"); } catch { }
+            return $"Data Source={chosen}";
+        }
+
         public DatabaseService()
         {
+            _connection = ComputeConnectionString();
+
+            // ensure directory for default path exists
+            try
+            {
+                var cs = new SQLiteConnectionStringBuilder(_connection);
+                var file = cs.DataSource;
+                var dir = Path.GetDirectoryName(file);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+            }
+            catch { }
+
+            // Log DB path and a quick summary (row count, min/max times) to help verify app uses expected file
+            try
+            {
+                var csb = new SQLiteConnectionStringBuilder(_connection);
+                var dbFile = csb.DataSource;
+                try { Trace.TraceInformation($"DatabaseService: using DB file '{dbFile}'"); } catch { }
+
+                using (var conn = new SQLiteConnection(_connection))
+                {
+                    conn.Open();
+                    try
+                    {
+                        using (var c = new SQLiteCommand("SELECT COUNT(*) FROM Prices;", conn))
+                        {
+                            var cnt = Convert.ToInt32(c.ExecuteScalar());
+                            Trace.TraceInformation($"DatabaseService: Prices rows={cnt}");
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        using (var c2 = new SQLiteCommand("SELECT MIN(Time), MAX(Time) FROM Prices;", conn))
+                        using (var r = c2.ExecuteReader())
+                        {
+                            if (r.Read())
+                            {
+                                var min = r.IsDBNull(0) ? "NULL" : r.GetValue(0).ToString();
+                                var max = r.IsDBNull(1) ? "NULL" : r.GetValue(1).ToString();
+                                Trace.TraceInformation($"DatabaseService: Prices time range: min={min} max={max}");
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
             if (_isInitialized)
                 return;
 
@@ -334,7 +519,7 @@ namespace TradeMVVM.Trading.Services
                                 continue;
 
                             var totalEur = reader.GetDouble(1);
-                            var updated = reader.IsDBNull(2) ? DateTime.MinValue : reader.GetDateTime(2);
+                            var updated = ReadNullableDateTime(reader, 2) ?? DateTime.MinValue;
                             dict[isin] = (updated, totalEur);
                         }
                     }
@@ -642,7 +827,7 @@ namespace TradeMVVM.Trading.Services
                         if (reader.Read())
                         {
                             var total = reader.IsDBNull(0) ? (double?)null : reader.GetDouble(0);
-                            var updated = reader.IsDBNull(1) ? (DateTime?)null : reader.GetDateTime(1);
+                            var updated = ReadNullableDateTime(reader, 1);
                             return (updated, total);
                         }
                     }
@@ -674,16 +859,16 @@ namespace TradeMVVM.Trading.Services
                         WHERE p.Price IS NOT NULL AND p.Price > 0;", conn);
                     using (var reader = cmd.ExecuteReader())
                     {
-                        while (reader.Read())
+                            while (reader.Read())
                         {
                             var sp = new StockPoint
                             {
                                 ISIN = reader.GetString(0),
-                                Time = reader.GetDateTime(1),
+                                Time = ReadDateTimeSafe(reader, 1),
                                 Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
                                 Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
                                 Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
-                                ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? (DateTime?)reader.GetDateTime(5) : null
+                                ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null
                             };
                             dict[sp.ISIN] = sp;
                         }
@@ -752,20 +937,20 @@ namespace TradeMVVM.Trading.Services
 
                 using (var reader = cmd.ExecuteReader())
                 {
-                    while (reader.Read())
-                    {
-                        list.Add(new StockPoint
+                        while (reader.Read())
                         {
-                            ISIN = reader.GetString(0),
-                            Time = reader.GetDateTime(1),
-                            Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                            Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
-                            Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
-                            ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? (DateTime?)reader.GetDateTime(5) : null,
-                            Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
-                            PredictedPrice = reader.FieldCount > 7 && !reader.IsDBNull(7) ? reader.GetDouble(7) : 0.0
-                        });
-                    }
+                            list.Add(new StockPoint
+                            {
+                                ISIN = reader.GetString(0),
+                                Time = ReadDateTimeSafe(reader, 1),
+                                Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
+                                Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
+                                Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
+                                ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
+                                Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
+                                PredictedPrice = reader.FieldCount > 7 && !reader.IsDBNull(7) ? reader.GetDouble(7) : 0.0
+                            });
+                        }
                 }
             }
 
@@ -786,7 +971,7 @@ namespace TradeMVVM.Trading.Services
                 {
                     while (reader.Read())
                     {
-                        var time = reader.IsDBNull(0) ? DateTime.MinValue : reader.GetDateTime(0);
+                        var time = ReadDateTimeSafe(reader, 0);
                         var total = reader.IsDBNull(1) ? 0.0 : reader.GetDouble(1);
                         list.Add(new Tuple<DateTime, double>(time, total));
                     }
@@ -810,20 +995,20 @@ namespace TradeMVVM.Trading.Services
                 cmd.Parameters.AddWithValue("@since", since);
                 using (var reader = cmd.ExecuteReader())
                 {
-                    while (reader.Read())
-                    {
-                        list.Add(new StockPoint
-                        {
-                            ISIN = reader.GetString(0),
-                            Time = reader.GetDateTime(1),
-                            Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                            Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
-                            Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
-                            ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? (DateTime?)reader.GetDateTime(5) : null,
-                            Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
-                            PredictedPrice = reader.FieldCount > 7 && !reader.IsDBNull(7) ? reader.GetDouble(7) : 0.0
-                        });
-                    }
+                                while (reader.Read())
+                                {
+                                    list.Add(new StockPoint
+                                    {
+                                        ISIN = reader.GetString(0),
+                                        Time = ReadDateTimeSafe(reader, 1),
+                                        Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
+                                        Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
+                                        Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
+                                        ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
+                                        Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
+                                        PredictedPrice = reader.FieldCount > 7 && !reader.IsDBNull(7) ? reader.GetDouble(7) : 0.0
+                                    });
+                                }
                 }
             }
             return list;
@@ -878,11 +1063,11 @@ namespace TradeMVVM.Trading.Services
                                 list.Add(new StockPoint
                                 {
                                     ISIN = reader.GetString(0),
-                                    Time = reader.GetDateTime(1),
+                                    Time = ReadDateTimeSafe(reader, 1),
                                     Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
                                     Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
                                     Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
-                                    ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? (DateTime?)reader.GetDateTime(5) : null,
+                                    ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
                                     Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
                                     PredictedPrice = reader.FieldCount > 7 && !reader.IsDBNull(7) ? reader.GetDouble(7) : 0.0
                                 });
