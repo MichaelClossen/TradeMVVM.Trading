@@ -1,0 +1,71 @@
+<UserControl x:Class="TradeMVVM.Trading.Views.Settings.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:TradeMVVM.Trading.ViewModels"
+             xmlns:local="clr-namespace:TradeMVVM.Trading.Views.Settings"
+             MinWidth="420" MinHeight="420">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" CanContentScroll="True">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- BNP priority checkbox removed: keywords now take effect automatically when provided -->
+
+        <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,8,0,0">
+            <TextBlock Text="BNP Priority Keywords (comma-separated)" />
+            <TextBox Text="{Binding BnpPriorityKeywords, Mode=TwoWay}" ToolTip="Komma-getrennte Stichworte, z. B. 'long,short,turbo'. Leer = deaktiviert. Keywords werden automatisch aktiviert." />
+        </StackPanel>
+
+        <!-- legacy provider keyword settings removed: Wallstreet, LangUndSchwarz, DeutscheBoerse -->
+
+        <!-- Prediction settings -->
+        <StackPanel Grid.Row="4" Orientation="Vertical" Margin="0,8,0,0">
+            <TextBlock Text="Predictions: Method" />
+            <ComboBox SelectedValue="{Binding PredictionMethod, Mode=TwoWay}" SelectedValuePath="Content" ToolTip="Wähle die Vorhersage-Methode: 'MovingAverage' benutzt einen gleitenden Durchschnitt, 'ML' nutzt Machine Learning, 'None' deaktiviert Vorhersagen.">
+                <ComboBoxItem Content="MovingAverage" />
+                <ComboBoxItem Content="ML" />
+                <ComboBoxItem Content="None" />
+            </ComboBox>
+        </StackPanel>
+
+        <StackPanel Grid.Row="5" Orientation="Vertical" Margin="0,8,0,0">
+            <TextBlock Text="Prediction Window Size" />
+            <TextBox Text="{Binding PredictionWindowSize, Mode=TwoWay}" ToolTip="Anzahl der letzten Datenpunkte, die für die Vorhersage verwendet werden (Standard: 20)." />
+            <TextBlock Text="Prediction Threshold (%)" Margin="0,6,0,0" />
+            <TextBox Text="{Binding PredictionThresholdPercent, Mode=TwoWay}" ToolTip="Schwellenwert in Prozent zur Auslösung eines Signals (z. B. 1.0 = 1%)." />
+        </StackPanel>
+
+        <StackPanel Grid.Row="6" Orientation="Vertical" Margin="0,8,0,0">
+            <TextBlock Text="Unresolved ISIN Failure Threshold" />
+            <TextBox Text="{Binding UnresolvedIsinFailureThreshold, Mode=TwoWay}" ToolTip="Anzahl aufeinanderfolgender Provider-Fehler bevor ein Unresolved-ISIN-Log geschrieben wird (Standard: 5)." />
+            <TextBlock Text="Price NaN Failure Threshold" Margin="0,6,0,0" />
+            <TextBox Text="{Binding PriceNanFailureThreshold, Mode=TwoWay}" ToolTip="Anzahl aufeinanderfolgender NaN-Preise bevor eine Info-Meldung geschrieben wird (Standard: 5)." />
+            <TextBlock Text="PL axis half-span (€)" Margin="0,6,0,0" />
+            <TextBox Text="{Binding PlAxisMarginEur, Mode=TwoWay}" ToolTip="Halbspan der €-Achse um aktuellen TotalPL (z. B. 10)." />
+            <TextBlock Text="Outlier threshold (%)" Margin="0,6,0,0" />
+            <TextBox Text="{Binding OutlierThresholdPercent, Mode=TwoWay}" ToolTip="Prozentuale Änderung, oberhalb derer ein Preiswechsel als Ausreisser behandelt und ignoriert wird (z. B. 50)." />
+        </StackPanel>
+
+        <!-- Deutsche Börse priority removed from preferences -->
+
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="Save" Command="{Binding SaveCommand}" Width="90" Margin="0,0,8,0" Padding="8,4"/>
+            <Button Content="Cancel" Command="{Binding CancelCommand}" Width="90" Padding="8,4"/>
+            <Button Content="Delete Logs" Command="{Binding DeleteLogsCommand}" Width="110" Margin="8,0,0,0" Padding="8,4"/>
+        </StackPanel>
+
+        <Border Grid.Row="8" BorderBrush="Gray" BorderThickness="1" Margin="0,12,0,0" Padding="6">
+            <local:ProvidersListView DataContext="{Binding ProvidersVM}" MinHeight="120" />
+        </Border>
+    </Grid>
+    </ScrollViewer>
+</UserControl>

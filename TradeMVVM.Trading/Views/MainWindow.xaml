@@ -1,0 +1,47 @@
+<Window x:Class="TradeMVVM.Trading.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:toolbar="clr-namespace:TradeMVVM.Trading.Views.Toolbar"
+        xmlns:sidebar="clr-namespace:TradeMVVM.Trading.Views.Sidebar"
+        xmlns:charts="clr-namespace:TradeMVVM.Trading.Views.Charts"
+        xmlns:holdings="clr-namespace:TradeMVVM.Trading.Views.HoldingsReport"
+        Title="Trading Dashboard"
+        Height="1100"
+        Width="2200"
+        Background="White">
+
+    <Grid Margin="10">
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <toolbar:ToolbarView Grid.Row="0"/>
+
+        <!-- Main Layout -->
+        <Grid x:Name="MainLayoutGrid" Grid.Row="1" Margin="0,12,0,0">
+
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="5"/>
+                <!-- moved splitter more to the left by increasing right column width -->
+                <ColumnDefinition x:Name="RightPanelColumn" Width="1200"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Charts -->
+            <charts:ChartsView x:Name="Charts" Grid.Column="0"/>
+
+            <!-- vertical splitter between charts and right panel -->
+            <GridSplitter x:Name="MainColumnSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ResizeBehavior="PreviousAndNext" ShowsPreview="True" Cursor="SizeWE"/>
+
+            <!-- Right column: Holdings panel -->
+            <Border Grid.Column="2" Padding="6" Background="#222222" CornerRadius="4">
+                <holdings:HoldingsReportView DataContext="{Binding HoldingsReport}" />
+            </Border>
+
+        </Grid>
+
+    </Grid>
+</Window>

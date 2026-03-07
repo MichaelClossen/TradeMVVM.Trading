@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>TradeMVVM.Domain</RootNamespace>
+    <LangVersion>8.0</LangVersion>
+  </PropertyGroup>
+</Project>

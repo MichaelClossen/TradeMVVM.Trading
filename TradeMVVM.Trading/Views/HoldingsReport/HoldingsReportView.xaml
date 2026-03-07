@@ -1,0 +1,343 @@
+
+    
+    <UserControl x:Class="TradeMVVM.Trading.Views.HoldingsReport.HoldingsReportView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:TradeMVVM.Trading.Presentation.Converters"
+             Background="White">
+
+    <UserControl.Resources>
+        <conv:NumericToBrushConverter x:Key="NumToBrush" PositiveBrush="Green" NegativeBrush="Red" ZeroBrush="Black" />
+        <conv:NumericToFontWeightConverter x:Key="NumToWeight" PositiveWeight="Bold" NegativeWeight="Bold" ZeroWeight="Normal" />
+        <conv:NumericToBrushConverter x:Key="PlBrush" PositiveBrush="Green" NegativeBrush="Red" ZeroBrush="Black" />
+
+        <!-- Read-only TextBox style used for cell elements so text can be selected and copied -->
+        <Style x:Key="CellTextBoxStyle" TargetType="TextBox">
+            <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="IBeam" />
+            <Setter Property="Focusable" Value="True" />
+        </Style>
+
+        <!-- Name column: no wrapping, show tooltip and allow selection -->
+        <Style x:Key="TrimmedTextBox" TargetType="TextBox" BasedOn="{StaticResource CellTextBoxStyle}">
+            <Setter Property="TextWrapping" Value="NoWrap" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar row: placed in its own non-scrolling Grid row so it stays fixed while the DataGrid scrolls -->
+        <Grid Grid.Row="0" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Grid.Column="0">
+                <Button Content="Open CSV" Click="OpenCsvButton_Click" Margin="0,0,6,0" Padding="6,2" />
+                <Button Content="Export CSV" Command="{Binding ExportCommand}" Margin="0,0,6,0" Padding="6,2" />
+                <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,6,0" Padding="6,2" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Grid.Column="1">
+                <TextBlock Text="Suche:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <TextBox Width="154" Margin="0,0,6,0" VerticalAlignment="Center"
+                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock Text="Alle Alert %:" VerticalAlignment="Center" Margin="8,0,6,0" />
+                <TextBox x:Name="TxtAllAlertPercent" Width="60" Margin="0,0,6,0" VerticalAlignment="Center" />
+                <Button Content="Setzen" Margin="0,0,6,0" Padding="6,2" Click="SetAllAlertThreshold_Click" />
+                <TextBlock Text="Alle Trail %:" VerticalAlignment="Center" Margin="8,0,6,0" />
+                <TextBox x:Name="TxtAllTrailingPercent" Width="60" Margin="0,0,6,0" VerticalAlignment="Center" />
+                <Button Content="Setzen" Margin="0,0,6,0" Padding="6,2" Click="SetAllTrailingThreshold_Click" />
+                <Button Content="Löschen rückgängig" Margin="6,0,0,0" Padding="6,2" Click="UndoLastDelete_Click" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Grid.Column="2" Margin="10,0,0,0">
+                <TextBlock Text="Zoom:" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <Slider x:Name="ZoomSlider"
+                        Width="110"
+                        Minimum="70"
+                        Maximum="170"
+                        TickFrequency="10"
+                        IsSnapToTickEnabled="False"
+                        Value="100"
+                        VerticalAlignment="Center"
+                        ValueChanged="ZoomSlider_ValueChanged"
+                        ToolTip="Strg + Mausrad zum Zoomen" />
+                <Button x:Name="ZoomValueButton" Content="100%" Margin="6,0,0,0" Padding="6,2" Click="ResetZoomButton_Click" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition />
+            </Grid.ColumnDefinitions>
+
+            <DataGrid x:Name="HoldingsDataGrid" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                      ItemsSource="{Binding Holdings}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="False"
+                      CanUserSortColumns="True"
+                      VerticalAlignment="Stretch"
+                      CanUserResizeColumns="True"
+                      CanUserReorderColumns="True"
+                      HorizontalScrollBarVisibility="Auto"
+                      ColumnWidth="SizeToCells"
+                      Background="White"
+                      AlternationCount="2"
+                      EnableRowVirtualization="True"
+                      EnableColumnVirtualization="True"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      ScrollViewer.CanContentScroll="True">
+            <DataGrid.Resources>
+                <Style TargetType="DataGridCell">
+                    <Setter Property="FontSize" Value="{Binding FontSize, RelativeSource={RelativeSource AncestorType=DataGrid}}" />
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Foreground" Value="Black" />
+                    <!-- allow inner text elements to receive focus/selection -->
+                    <Setter Property="Focusable" Value="False" />
+                </Style>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="Background" Value="White" />
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                        <Trigger Property="AlternationIndex" Value="1">
+                            <Setter Property="Background" Value="#FFF7F7F7" />
+                        </Trigger>
+                        <DataTrigger Binding="{Binding IsTotal}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsRecentlyUpdated}" Value="True">
+                            <Setter Property="Background" Value="#3400BFFF" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsRecentlyPolled}" Value="True">
+                            <Setter Property="Background" Value="#40FF0000" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+                <Style TargetType="DataGridColumnHeader">
+                    <Setter Property="FontSize" Value="{Binding FontSize, RelativeSource={RelativeSource AncestorType=DataGrid}}" />
+                    <Setter Property="Foreground" Value="Black" />
+                    <Setter Property="Background" Value="White" />
+                </Style>
+            </DataGrid.Resources>
+            <DataGrid.FontSize>9</DataGrid.FontSize>
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="ISIN" Width="SizeToCells" MinWidth="60" SortMemberPath="ISIN">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="🗑" Width="24" Height="20" Margin="0,0,6,0" Click="DeleteHolding_Click" ToolTip="Löschen" />
+                                <TextBox Text="{Binding ISIN}" Style="{StaticResource CellTextBoxStyle}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Alert %" Width="SizeToCells" MinWidth="70" SortMemberPath="AlertThresholdPercent">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding AlertThresholdPercent, StringFormat=N2, UpdateSourceTrigger=LostFocus}"
+                                     Width="64"
+                                     HorizontalContentAlignment="Center"
+                                     VerticalContentAlignment="Center"
+                                     Padding="0" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Trail %" Width="SizeToCells" MinWidth="70" SortMemberPath="TrailingStopPercent">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding TrailingStopPercent, StringFormat=N2, UpdateSourceTrigger=LostFocus}"
+                                     Width="64"
+                                     HorizontalContentAlignment="Center"
+                                     VerticalContentAlignment="Center"
+                                     Padding="0">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox">
+                                        <Setter Property="Foreground" Value="Black" />
+                                        <Setter Property="FontWeight" Value="Normal" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsTrailingStopBreached}" Value="True">
+                                                <Setter Property="Foreground" Value="Red" />
+                                                <Setter Property="FontWeight" Value="Bold" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="P/L % Vortag" Width="SizeToCells" MinWidth="70" SortMemberPath="PLPercent">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding PLPercent, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" Foreground="{Binding PLPercent, Converter={StaticResource NumToBrush}}" FontWeight="{Binding PLPercent, Converter={StaticResource NumToWeight}}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Akt. Marktwert" Width="SizeToCells" MinWidth="90" SortMemberPath="MarketValue">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding MarketValue, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Forecast column showing a simple arrow glyph based on Forecast property -->
+                <DataGridTemplateColumn Header="Prognose" Width="SizeToCells" MinWidth="80" SortMemberPath="Forecast">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Grid Width="24" Height="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock x:Name="ForecastGlyph" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="▬" />
+                                            <Setter Property="Foreground" Value="Gold" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Forecast}" Value="Up">
+                                                    <Setter Property="Text" Value="▲" />
+                                                    <Setter Property="Foreground" Value="Green" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Forecast}" Value="Down">
+                                                    <Setter Property="Text" Value="▼" />
+                                                    <Setter Property="Foreground" Value="Red" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Forecast}" Value="Neutral">
+                                                    <Setter Property="Text" Value="▬" />
+                                                    <Setter Property="Foreground" Value="Gold" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Name" Width="SizeToCells" MinWidth="80" SortMemberPath="Name">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding Name}" Style="{StaticResource TrimmedTextBox}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Letzter Handel" Width="SizeToCells" MinWidth="120" SortMemberPath="LastTradeTime">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding LastTradeTime, StringFormat=dd.MM.yyyy HH:mm}" Style="{StaticResource CellTextBoxStyle}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Anteile" Width="SizeToCells" MinWidth="70" SortMemberPath="Shares">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding Shares, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Letzter Preis entfernt; stattdessen Ø Kaufpreis an dieser Stelle einfügen -->
+                <DataGridTemplateColumn Header="Ø Kaufpreis" Width="SizeToCells" MinWidth="70" SortMemberPath="AvgBuyPrice">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding AvgBuyPrice, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Marktwert Kauf" Width="SizeToCells" MinWidth="90" SortMemberPath="MarketValueEur">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding MarketValueEur, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}">
+                                <TextBox.ToolTip>
+                                    <Binding Path="MarketValueEur"/>
+                                </TextBox.ToolTip>
+                            </TextBox>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Akt. Kurs" Width="SizeToCells" MinWidth="70" SortMemberPath="CurrentPrice">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding CurrentPrice, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="P/L € gesamt" Width="SizeToCells" MinWidth="90" SortMemberPath="PLAmount">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding PLAmount, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" Foreground="{Binding PLAmount, Converter={StaticResource PlBrush}}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Total P/L" Width="SizeToCells" MinWidth="90" SortMemberPath="TotalPL">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding TotalPL, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" Foreground="{Binding TotalPL, Converter={StaticResource PlBrush}}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <DataGridTemplateColumn Header="Realized P/L" Width="SizeToCells" MinWidth="95" SortMemberPath="RealizedPL">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding RealizedPL, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" Foreground="{Binding RealizedPL, Converter={StaticResource PlBrush}}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Ø Kaufpreis wurde weiter oben eingefügt (an Stelle 'Letzter Preis') -->
+
+                <!-- Removed columns: AvgSellPrice, TotalTaxes, UnrealizedPL per request -->
+                <DataGridTemplateColumn Header="Provider Zeit" Width="SizeToCells" MinWidth="140" SortMemberPath="ProviderTime">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding ProviderTime, StringFormat=dd.MM.yyyy HH:mm}" Style="{StaticResource CellTextBoxStyle}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+            </DataGrid>
+
+            <!-- vertical slider (external ScrollBar) - overlayed to sit next to the rightmost column -->
+            <!--<ScrollBar x:Name="ExternalVerticalScrollBar" Orientation="Vertical" Minimum="0" Maximum="100" Width="16"
+                       VerticalAlignment="Stretch" HorizontalAlignment="Right" Margin="0" Panel.ZIndex="1" />-->
+        </Grid>
+
+        <Border Grid.Row="2" Background="White" Padding="6" HorizontalAlignment="Right" Margin="0,8,0,0" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock Text="Total Gains (EUR): " FontWeight="Bold" Margin="0,0,6,0" Foreground="Black"/>
+                <TextBlock Text="{Binding TotalGains, StringFormat=N2}" Margin="0,0,12,0" Foreground="Green" FontWeight="Bold"/>
+                <TextBlock Text="Total Losses (EUR): " FontWeight="Bold" Margin="0,0,6,0" Foreground="Black"/>
+                <TextBlock Text="{Binding TotalLosses, StringFormat=N2}" Margin="0,0,12,0" Foreground="Red" FontWeight="Bold"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+
+</UserControl>

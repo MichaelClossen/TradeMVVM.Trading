@@ -1,0 +1,48 @@
+<UserControl x:Class="TradeMVVM.Trading.Views.Settings.ProvidersListView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinWidth="360">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Grid.Row="0" Margin="0,0,0,8">
+            <Button Content="Set all to Default (Gettex)" Click="BtnSetAllDefault_Click" Width="200" />
+        </StackPanel>
+        <!-- ColumnWidth=SizeToCells makes columns size to their content/headers -->
+        <DataGrid ItemsSource="{Binding Providers}" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="False" ColumnWidth="SizeToCells" Grid.Row="1">
+            <DataGrid.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+            </DataGrid.ItemsPanel>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="ISIN" Binding="{Binding ISIN}" Width="SizeToCells" IsReadOnly="True" />
+
+                <!-- Name: size to cell but constrain max width so it doesn't force the window too wide -->
+                <DataGridTemplateColumn Header="Name" Width="SizeToCells">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" MaxWidth="360" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- Primary Provider: ComboBox cell, size to content but with a reasonable MinWidth -->
+                <DataGridTemplateColumn Header="Primary Provider" Width="SizeToCells">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox
+                                ItemsSource="{Binding DataContext.ProviderOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                SelectedItem="{Binding PrimaryProvider, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                HorizontalAlignment="Left"
+                                MinWidth="120"
+                                IsEnabled="{Binding IsEditable}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>

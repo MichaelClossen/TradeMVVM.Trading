@@ -1,0 +1,51 @@
+<Window x:Class="TradeMVVM.Trading.Views.HoldingsReport.HoldingsReportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Holdings Report" Height="500" Width="900" Background="White">
+
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" Width="90" Margin="0,0,8,0"/>
+            <Button Content="Export CSV" Command="{Binding ExportCommand}" Width="90"/>
+        </StackPanel>
+
+        <DataGrid Grid.Row="1" ItemsSource="{Binding Holdings}" AutoGenerateColumns="False" IsReadOnly="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="ISIN" Binding="{Binding ISIN}" />
+                <DataGridTextColumn Header="Name" Binding="{Binding Name}" />
+                <DataGridTextColumn Header="Currency" Binding="{Binding Currency}" />
+                <DataGridTextColumn Header="Shares" Binding="{Binding Shares}" />
+                <DataGridTextColumn Header="LastPrice" Binding="{Binding LastPrice}" />
+                <DataGridTextColumn Header="MarketValue" Binding="{Binding MarketValue}" />
+                <DataGridTextColumn Header="MarketValue (EUR)" Binding="{Binding MarketValueEur, StringFormat=N2}" />
+                <DataGridTextColumn Header="TotalBoughtShares" Binding="{Binding TotalBoughtShares}" />
+                <DataGridTextColumn Header="AvgBuyPrice" Binding="{Binding AvgBuyPrice}" />
+                <DataGridTextColumn Header="TotalSoldShares" Binding="{Binding TotalSoldShares}" />
+                <DataGridTextColumn Header="AvgSellPrice" Binding="{Binding AvgSellPrice}" />
+                <DataGridTextColumn Header="Fees" Binding="{Binding TotalFees}" />
+                <DataGridTextColumn Header="Taxes" Binding="{Binding TotalTaxes}" />
+                <DataGridTextColumn Header="Realized P/L" Binding="{Binding RealizedPL}" />
+                <DataGridTextColumn Header="Unrealized P/L" Binding="{Binding UnrealizedPL}" />
+                <DataGridTextColumn Header="Total P/L" Binding="{Binding TotalPL}" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <TextBlock Text="Realized P/L (EUR): " FontWeight="Bold" Margin="0,0,6,0"/>
+            <TextBlock Text="{Binding TotalRealizedPL, StringFormat=N2}" Margin="0,0,12,0"/>
+            <TextBlock Text="Unrealized P/L (EUR): " FontWeight="Bold" Margin="0,0,6,0"/>
+            <TextBlock Text="{Binding TotalUnrealizedPL, StringFormat=N2}" Margin="0,0,12,0"/>
+            <TextBlock Text="Total P/L (EUR): " FontWeight="Bold" Margin="0,0,6,0"/>
+            <TextBlock Text="{Binding TotalPL, StringFormat=N2}" Margin="0,0,12,0"/>
+            <TextBlock Text="Total Taxes (EUR): " FontWeight="Bold" Margin="0,0,6,0"/>
+            <TextBlock Text="{Binding TotalTaxes, StringFormat=N2}" />
+        </StackPanel>
+    </Grid>
+
+</Window>
