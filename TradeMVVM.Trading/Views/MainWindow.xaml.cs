@@ -12,8 +12,8 @@ namespace TradeMVVM.Trading.Views
 {
     public partial class MainWindow : Window
     {
-        private readonly MainViewModel _vm;
-        private readonly DispatcherTimer _timer;
+        private MainViewModel _vm;
+        private DispatcherTimer _timer;
         private readonly SettingsService _settings;
         private bool _isApplyingSavedLayout;
         private bool _isRefreshInProgress;
@@ -43,18 +43,95 @@ namespace TradeMVVM.Trading.Views
                 MainColumnSplitter.DragCompleted += MainColumnSplitter_DragCompleted;
 
             // 🔥 Charts erzeugt eigenen ZoomController
-            _vm = new MainViewModel(Charts.ZoomController);
-            DataContext = _vm;
-            // register vm in App for global access on shutdown
-            try { TradeMVVM.Trading.App.MainViewModelInstance = _vm; } catch { }
+            // VM creation deferred until Loaded to ensure all XAML parts are initialized
+            this.Loaded += MainWindow_Loaded;
+            this.Activated += MainWindow_Activated;
+            // restore window if it's off-screen and ensure it can be activated
+            this.StateChanged += MainWindow_StateChanged;
+            // make sure saved position is visible on startup
+            EnsureWindowIsOnScreen();
+        }
 
-            _timer = new DispatcherTimer
+        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        {
+            try
             {
-                Interval = TimeSpan.FromSeconds(1)
-            };
+                if (WindowState == WindowState.Normal)
+                {
+                    // try to bring to foreground
+                    try { Topmost = true; } catch { }
+                    try { Topmost = false; } catch { }
+                    try { Activate(); } catch { }
+                }
+            }
+            catch { }
+        }
 
-            _timer.Tick += (s, e) => RefreshViews();
-            _timer.Start();
+        private void MainWindow_Activated(object? sender, EventArgs e)
+        {
+            try
+            {
+                // when activated ensure window is not hidden behind other windows
+                try { Topmost = true; } catch { }
+                try { Topmost = false; } catch { }
+            }
+            catch { }
+        }
+
+        // Ensure window is within the virtual screen bounds. If not, center it on the virtual screen.
+        private void EnsureWindowIsOnScreen()
+        {
+            try
+            {
+                // tolerances and virtual screen bounds
+                double vx = SystemParameters.VirtualScreenLeft;
+                double vy = SystemParameters.VirtualScreenTop;
+                double vw = SystemParameters.VirtualScreenWidth;
+                double vh = SystemParameters.VirtualScreenHeight;
+
+                // If width/height are not sensible, clamp to reasonable defaults
+                double w = double.IsNaN(Width) || Width <= 0 ? 800 : Width;
+                double h = double.IsNaN(Height) || Height <= 0 ? 600 : Height;
+
+                // If the saved window is completely outside the virtual screen, center it
+                bool outsideHoriz = Left + w < vx || Left > vx + vw;
+                bool outsideVert = Top + h < vy || Top > vy + vh;
+
+                if (outsideHoriz || outsideVert)
+                {
+                    Left = vx + Math.Max(0, (vw - w) / 2.0);
+                    Top = vy + Math.Max(0, (vh - h) / 2.0);
+                }
+            }
+            catch { }
+        }
+
+        private void MainWindow_Loaded(object? sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // ensure shown in taskbar and can be activated
+                try { ShowInTaskbar = true; } catch { }
+                try { ShowActivated = true; } catch { }
+
+                // create VM now that the visual tree is ready
+                _vm = new MainViewModel(Charts?.ZoomController);
+                DataContext = _vm;
+                try { TradeMVVM.Trading.App.MainViewModelInstance = _vm; } catch { }
+
+                _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                _timer.Tick += (s, ev) => RefreshViews();
+                _timer.Start();
+
+                // final attempt to ensure window is visible and active
+                try { EnsureWindowIsOnScreen(); } catch { }
+                try { Activate(); } catch { }
+            }
+            catch (Exception ex)
+            {
+                try { MessageBox.Show($"Fehler beim Erstellen des MainViewModel:\n{ex}", "Fehler beim Start", MessageBoxButton.OK, MessageBoxImage.Error); } catch { }
+                throw;
+            }
         }
 
         private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -160,6 +237,7 @@ namespace TradeMVVM.Trading.Views
             _isRefreshInProgress = true;
             try
             {
+                try { System.Diagnostics.Debug.WriteLine($"RefreshViews start: Stocks={_vm?.Stocks?.Count ?? 0}, PriceHistoryKeys={_vm?.PriceHistory?.Count ?? 0}"); } catch { }
                 if (WindowState == WindowState.Minimized)
                     return;
 
@@ -194,6 +272,7 @@ namespace TradeMVVM.Trading.Views
                     totalPoints += kv.Value?.Count ?? 0;
                 foreach (var kv in knockoutData)
                     totalPoints += kv.Value?.Count ?? 0;
+                try { System.Diagnostics.Debug.WriteLine($"RefreshViews: stockSeries={stockData.Count}, knockoutSeries={knockoutData.Count}, totalPoints={totalPoints}"); } catch { }
             }
             catch { }
 
@@ -205,7 +284,14 @@ namespace TradeMVVM.Trading.Views
                 return;
 
             // 1️⃣ Render
-            Charts.Render(stockData, knockoutData);
+            try
+            {
+                Charts.Render(stockData, knockoutData);
+            }
+            catch (Exception ex)
+            {
+                try { System.Diagnostics.Debug.WriteLine($"Charts.Render failed: {ex}"); } catch { }
+            }
             _lastRenderedPointCount = totalPoints;
             _lastRenderUtc = nowUtc;
 
@@ -215,6 +301,19 @@ namespace TradeMVVM.Trading.Views
             {
                 _isRefreshInProgress = false;
             }
+        }
+
+        // Helper to allow external controls (e.g. toolbar) to request an immediate refresh
+        public void TriggerRefresh()
+        {
+            try
+            {
+                // force a render even if data point count unchanged (zoom change should re-render)
+                try { _lastRenderedPointCount = -1; } catch { }
+                try { _lastRenderUtc = DateTime.MinValue; } catch { }
+                RefreshViews();
+            }
+            catch { }
         }
 
 

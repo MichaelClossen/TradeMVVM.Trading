@@ -1,4 +1,5 @@
-﻿using System.Windows.Controls;
+﻿using System;
+using System.Windows.Controls;
 using System.Windows;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -26,11 +27,29 @@ namespace TradeMVVM.Trading.Views.Toolbar
                     TxtZoomRange.Text = text;
 
                 var vm = DataContext as MainViewModel;
+                if (vm == null)
+                    vm = Application.Current?.MainWindow?.DataContext as MainViewModel;
                 var zoom = vm?.Zoom;
                 if (zoom == null)
                     return;
 
+                try { System.Diagnostics.Debug.WriteLine($"Toolbar: executing zoom index {idx}"); } catch { }
                 ExecuteCommand(GetZoomCommand(zoom, idx));
+
+                // request an immediate refresh of the charts so the new zoom is applied now
+                try
+                {
+                    Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            var mw = Application.Current?.MainWindow as TradeMVVM.Trading.Views.MainWindow;
+                            mw?.TriggerRefresh();
+                        }
+                        catch { }
+                    }));
+                }
+                catch { }
             }
             catch { }
         }
