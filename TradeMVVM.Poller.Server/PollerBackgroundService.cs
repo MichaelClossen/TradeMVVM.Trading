@@ -6,8 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using TradeMVVM.Poller.Core;
 using TradeMVVM.Domain;
+using TradeMVVM.Trading.Services;
 
-public class PollerBackgroundService : BackgroundService
+internal class PollerBackgroundService : BackgroundService
 {
     private readonly ILogger<PollerBackgroundService> _logger;
     private readonly ChartDataProvider _provider;

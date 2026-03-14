@@ -22,6 +22,7 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
     public class MainViewModel : BaseViewModel, IDisposable
     {
         private readonly TradeMVVM.Trading.Services.SettingsService _settingsService;
+        private readonly TradeMVVM.Trading.Services.ServerControlService _serverControl;
         private PricePollingService _pollingService;
         private readonly ChartDataProvider _chartDataProvider;
         private readonly PriceRepository _repository = new PriceRepository();
@@ -184,6 +185,7 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         {
             // use DI-provided settings and provider
             _settingsService = App.Services.GetRequiredService<TradeMVVM.Trading.Services.SettingsService>();
+            _serverControl = App.Services.GetService<TradeMVVM.Trading.Services.ServerControlService>() ?? new TradeMVVM.Trading.Services.ServerControlService();
             _chartDataProvider = App.Services.GetRequiredService<ChartDataProvider>();
             // subscribe to settings changes and reload provider keywords (update ChartDataProvider via polling service)
             _settingsService.SettingsChanged += () =>
@@ -232,6 +234,12 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
 
             StartCommand = new AsyncRelayCommand(StartAsync);
             StopCommand = new RelayCommand(Stop);
+            // server control commands (override Start/Stop to use DB flag when server mode is used)
+            ServerStartCommand = new RelayCommand(() => { try { _serverControl.SetPollingEnabled(true); } catch { } });
+            ServerStopCommand = new RelayCommand(() => { try { _serverControl.SetPollingEnabled(false); } catch { } });
+
+            // poll server heartbeat timer
+            _ = StartServerHeartbeatWatcher();
 
             ClearDbCommand = new RelayCommand(() =>
             {
@@ -267,6 +275,12 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         }
 
         public ICommand OpenSettingsCommand { get; }
+        public ICommand ServerStartCommand { get; }
+        public ICommand ServerStopCommand { get; }
+
+        private DispatcherTimer _serverHeartbeatTimer;
+        private DateTime? _lastServerHeartbeat;
+        public DateTime? LastServerHeartbeat => _lastServerHeartbeat;
 
         private void OpenSettings()
         {
@@ -296,6 +310,27 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
                     providersVm.Load(holdings);
                     vm.ProvidersVM = providersVm;
                 }
+
+        private async Task StartServerHeartbeatWatcher()
+        {
+            await Task.Yield();
+            try
+            {
+                _serverHeartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+                _serverHeartbeatTimer.Tick += (s, e) =>
+                {
+                    try
+                    {
+                        var hb = _serverControl.GetLastHeartbeat();
+                        _lastServerHeartbeat = hb;
+                        OnPropertyChanged(nameof(LastServerHeartbeat));
+                    }
+                    catch { }
+                };
+                _serverHeartbeatTimer.Start();
+            }
+            catch { }
+        }
                 catch { }
 
                 win.Content = view;

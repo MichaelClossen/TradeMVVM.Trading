@@ -19,6 +19,9 @@
                     Width="70"
                     Margin="2"/>
 
+            <Button Content="Server Start" Command="{Binding ServerStartCommand}" Width="90" Margin="2"/>
+            <Button Content="Server Stop" Command="{Binding ServerStopCommand}" Width="90" Margin="2"/>
+
             <Button Content="Kill Chrome"
                     Width="90"
                     Margin="2"
