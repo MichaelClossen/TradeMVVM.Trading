@@ -35,6 +35,7 @@ public class PollerBackgroundService : BackgroundService
 
         try
         {
+            // run polling loop; service writes heartbeat to its internal DB control table
             await service.StartAsync(stocks, stoppingToken);
         }
         catch (OperationCanceledException)

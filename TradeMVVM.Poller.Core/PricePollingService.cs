@@ -30,6 +30,7 @@ namespace TradeMVVM.Poller.Core
         // per-ISIN consecutive NaN/invalid-price counter; only log Info after threshold
         private static readonly ConcurrentDictionary<string, int> _nanFailureCounts = new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly TradeMVVM.Trading.Services.DatabaseService _dbService;
+        private readonly DatabaseService _coreDbService;
         // Timeout for a single ISIN fetch operation (skip ISIN if exceeded)
         private readonly TimeSpan _perIsinTimeout = TimeSpan.FromSeconds(25);
 
@@ -46,6 +47,7 @@ namespace TradeMVVM.Poller.Core
             _rand = new Random();
             _maxDegreeOfParallelism = Math.Max(1, maxDegreeOfParallelism);
             try { _dbService = (TradeMVVM.Trading.App.Services?.GetService(typeof(TradeMVVM.Trading.Services.DatabaseService)) as TradeMVVM.Trading.Services.DatabaseService) ?? new TradeMVVM.Trading.Services.DatabaseService(); } catch { _dbService = new TradeMVVM.Trading.Services.DatabaseService(); }
+            try { _coreDbService = new DatabaseService(); } catch { _coreDbService = null!; }
 
             // load persisted nan counts
             try
@@ -341,8 +343,18 @@ namespace TradeMVVM.Poller.Core
                     try { await Task.Delay(5000, token); } catch { }
                 }
 
+                // write heartbeat and check DB control flag
                 try
                 {
+                    _coreDbService?.SetHeartbeat(DateTime.UtcNow);
+
+                    // if polling disabled in DB, wait and continue
+                    if (_coreDbService != null && !_coreDbService.IsPollingEnabled())
+                    {
+                        try { await Task.Delay(TimeSpan.FromSeconds(5), token); } catch { }
+                        continue;
+                    }
+
                     // add randomized jitter to avoid synchronized polling patterns
                     try
                     {
