@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Poller: Launch",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/TradeMVVM.Poller.Server/bin/Debug/net8.0/TradeMVVM.Poller.Server.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/TradeMVVM.Poller.Server",
+      "console": "integratedTerminal"
+    }
+  ]
+}
