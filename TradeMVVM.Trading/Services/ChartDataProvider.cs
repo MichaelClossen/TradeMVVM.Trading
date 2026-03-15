@@ -130,13 +130,12 @@ namespace TradeMVVM.Trading.Services
             var attemptedUrls = new List<string>();
 
             bool preferBnp = false;
-
             try
             {
-                // Use the same preference logic as the settings view / provider list per holding item.
+                // determine preferred provider
                 var preferred = GetPrimaryProviderForName(name ?? string.Empty);
                 preferBnp = string.Equals(preferred, "BNP", StringComparison.OrdinalIgnoreCase);
-                Debug.WriteLine($"DataProvider: {isin} type={type} preferBnp={preferBnp} preferred={preferred} name='{name}'");
+                Debug.WriteLine($"DataProvider: {isin} preferred={preferred}");
             }
             catch { }
 
@@ -152,7 +151,14 @@ namespace TradeMVVM.Trading.Services
                     if (r.HasValue && r.Value.Item1 != 0)
                         return (r.Value.Item1, r.Value.Item2, "BNP", r.Value.Item3);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    try { Console.WriteLine($"TryBnpAsync exception for {isin}: {ex.Message}"); } catch { }
+                }
+                finally
+                {
+                    try { if (attemptedUrls != null && attemptedUrls.Count > 0) Debug.WriteLine($"TryBnpAsync attempted URLs for {isin}: {string.Join(';', attemptedUrls)}"); } catch { }
+                }
                 return null;
             }
 
@@ -167,25 +173,43 @@ namespace TradeMVVM.Trading.Services
                     if (r.HasValue && r.Value.Item1 != 0)
                         return (r.Value.Item1, r.Value.Item2, "Gettex", r.Value.Item3);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    try { Console.WriteLine($"TryDefaultAsync exception for {isin}: {ex.Message}"); } catch { }
+                }
+                finally
+                {
+                    try { if (attemptedUrls != null && attemptedUrls.Count > 0) Debug.WriteLine($"TryDefaultAsync attempted URLs for {isin}: {string.Join(';', attemptedUrls)}"); } catch { }
+                }
                 return null;
             }
+
+            var preferredProvider = preferBnp ? "BNP" : "Gettex";
 
             if (preferBnp)
             {
                 var bnpRes = await TryBnpAsync();
-                if (bnpRes.HasValue) { Debug.WriteLine($"DataProvider: {isin} → BNP OK price={bnpRes.Value.price}"); return bnpRes.Value; }
-                Debug.WriteLine($"DataProvider: {isin} → BNP failed, no retry/fallback (skip)");
+                if (bnpRes.HasValue)
+                {
+                    // minimal server output: ISIN,Price,Percent,Provider
+                    Console.WriteLine($"{isin},{bnpRes.Value.price},{bnpRes.Value.percent},{bnpRes.Value.provider}");
+                    return bnpRes.Value;
+                }
+                // failed — output ISIN,null,null,preferredProvider
+                Console.WriteLine($"{isin},null,null,{preferredProvider}");
+                return (double.NaN, double.NaN, preferredProvider, null);
             }
             else
             {
                 var defRes = await TryDefaultAsync();
-                if (defRes.HasValue) { Debug.WriteLine($"DataProvider: {isin} → Gettex OK price={defRes.Value.price}"); return defRes.Value; }
-                Debug.WriteLine($"DataProvider: {isin} → Gettex failed, no retry/fallback (skip)");
+                if (defRes.HasValue)
+                {
+                    Console.WriteLine($"{isin},{defRes.Value.price},{defRes.Value.percent},{defRes.Value.provider}");
+                    return defRes.Value;
+                }
+                Console.WriteLine($"{isin},null,null,{preferredProvider}");
+                return (double.NaN, double.NaN, preferredProvider, null);
             }
-
-            Debug.WriteLine($"DataProvider: {isin} → ALL PROVIDERS FAILED");
-            return (double.NaN, double.NaN, string.Empty, null);
         }
 
         // DeutscheBoerse provider removed - segments list deleted

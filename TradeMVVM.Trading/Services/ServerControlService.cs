@@ -10,10 +10,14 @@ namespace TradeMVVM.Trading.Services
         private readonly string _connection;
         private readonly bool _usePostgres;
 
+        // expose connection for diagnostics
+        public string ConnectionString => _connection;
+
         public ServerControlService()
         {
             var env = Environment.GetEnvironmentVariable("TRADE_DB_CONNECTION");
-            _connection = string.IsNullOrWhiteSpace(env) ? "Data Source=trading.db" : env;
+            // Default to the absolute development DB path so GUI and poller use the same file during development
+            _connection = string.IsNullOrWhiteSpace(env) ? "Data Source=C:\\Users\\micha\\Desktop\\Trade\\trading.db" : env;
             _usePostgres = !string.IsNullOrWhiteSpace(env) && (env.Contains("Host=", StringComparison.OrdinalIgnoreCase) || env.Contains("Username=", StringComparison.OrdinalIgnoreCase));
         }
 
@@ -28,6 +32,16 @@ namespace TradeMVVM.Trading.Services
                     using var cmd = new NpgsqlCommand("SELECT LastHeartbeat FROM PollingControl WHERE Id = 1", conn);
                     var v = cmd.ExecuteScalar();
                     if (v == null || v == DBNull.Value) return null;
+                    // prefer parsing as DateTimeOffset (handles offsets like +01:00 or trailing Z), then return UTC DateTime
+                    var s = v.ToString();
+                    // parse as DateTimeOffset first so offsets are respected, otherwise parse as local ISO format
+                    // Prefer parsing as DateTimeOffset. Treat unspecified offsets as UTC so legacy values without 'Z' are
+                    // interpreted as UTC timestamps rather than local time (the DB historically stored UTC).
+                    // Parse and return a local DateTime so the GUI and DB show the same human-readable time.
+                    if (System.DateTimeOffset.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dto))
+                        return dto.LocalDateTime;
+                    if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeLocal, out var dtLocal))
+                        return DateTime.SpecifyKind(dtLocal, DateTimeKind.Local);
                     return Convert.ToDateTime(v);
                 }
                 else
@@ -37,6 +51,11 @@ namespace TradeMVVM.Trading.Services
                     using var cmd = new SQLiteCommand("SELECT LastHeartbeat FROM PollingControl WHERE Id = 1", conn);
                     var v = cmd.ExecuteScalar();
                     if (v == null || v == DBNull.Value) return null;
+                    var s = v.ToString();
+                    if (System.DateTimeOffset.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dto))
+                        return dto.LocalDateTime;
+                    if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeLocal, out var dtLocal))
+                        return DateTime.SpecifyKind(dtLocal, DateTimeKind.Local);
                     return Convert.ToDateTime(v);
                 }
             }

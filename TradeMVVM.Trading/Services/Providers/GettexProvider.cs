@@ -192,10 +192,12 @@ namespace TradeMVVM.Trading.Services.Providers
             try { if (attemptedUrls != null) foreach (var u in urls) attemptedUrls.Add(u); } catch { }
             if (IsShuttingDown) return null;
 
+            // frequently respect the caller cancellation token so Ctrl+C / shutdown is responsive
+            bool throttleAcquired = false;
             try
             {
-                // do not bind to transient polling timeout tokens; only stop on explicit shutdown
-                await _throttle.WaitAsync(CancellationToken.None);
+                await _throttle.WaitAsync(token);
+                throttleAcquired = true;
             }
             catch (OperationCanceledException)
             {
@@ -224,21 +226,28 @@ namespace TradeMVVM.Trading.Services.Providers
             try
             {
                 // serialize all interactions with the shared IWebDriver instance
-                await _driverUsage.WaitAsync(CancellationToken.None);
+                await _driverUsage.WaitAsync(token);
                 driverUsageAcquired = true;
 
-                if (IsShuttingDown)
+                if (IsShuttingDown || token.IsCancellationRequested)
                     return null;
 
                 foreach (var url in urls)
                 {
-                    if (IsShuttingDown)
+                    if (IsShuttingDown || token.IsCancellationRequested)
                         return null;
 
                     bool navSucceeded = false;
                     for (int navAttempt = 0; navAttempt < 2 && !navSucceeded; navAttempt++)
                     {
-                        try { driver.Navigate().GoToUrl(url); navSucceeded = true; }
+                        try
+                        {
+                            // check cancellation just before a potentially blocking navigation
+                            if (token.IsCancellationRequested || IsShuttingDown)
+                                break;
+                            driver.Navigate().GoToUrl(url);
+                            navSucceeded = true;
+                        }
                         catch (WebDriverException wex)
                         {
                             try { Trace.TraceWarning($"GettexProvider: navigation failed for {url}: {wex.Message}"); } catch { }
@@ -253,6 +262,11 @@ namespace TradeMVVM.Trading.Services.Providers
                     }
 
                     if (!navSucceeded) continue;
+
+                    if (token.IsCancellationRequested || IsShuttingDown)
+                    {
+                        return null;
+                    }
 
                     if (!TryWaitForReady(driver, wait)) { try { Trace.TraceWarning($"GettexProvider: readyState wait failed for URL {url}"); } catch { } continue; }
 
@@ -294,7 +308,10 @@ namespace TradeMVVM.Trading.Services.Providers
                 {
                     try { _driverUsage.Release(); } catch { }
                 }
-                try { _throttle.Release(); } catch { }
+                if (throttleAcquired)
+                {
+                    try { _throttle.Release(); } catch { }
+                }
             }
         }
 

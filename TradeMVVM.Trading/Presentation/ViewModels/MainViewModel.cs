@@ -50,6 +50,7 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         public ICommand StartCommand { get; }
         public ICommand StopCommand { get; }
         public ICommand ClearDbCommand { get; }
+        public ICommand BackfillPercentCommand { get; }
         public ICommand GenerateHoldingsCommand { get; }
         public ZoomCommands Zoom { get; }
 
@@ -216,17 +217,7 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
             // polling watchdog (disabled until polling starts) - use thread-pool timer so UI work (zoom) doesn't block it
             _pollWatchdogTimer = new System.Threading.Timer(_ => CheckPollingWatchdog(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
 
-            // perform one-time maintenance on the local price database to remove
-            // duplicates, zero/null prices and reclaim space
-            try
-            {
-                _repository.CleanDatabase();
-                System.Diagnostics.Debug.WriteLine("DB: CleanDatabase executed at startup.");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"DB: CleanDatabase failed: {ex.Message}");
-            }
+            // DB cleanup is now manual via toolbar button
 
             PriceHistory = new Dictionary<string, List<Tuple<DateTime, double>>>();
 
@@ -261,6 +252,34 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
                 }
             });
 
+            BackfillPercentCommand = new RelayCommand(() =>
+            {
+                // run backfill on background thread to avoid UI freeze
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        var db = new TradeMVVM.Trading.Services.DatabaseService();
+                        var updated = db.BackfillPercentWhereZero();
+                        try { System.Diagnostics.Debug.WriteLine($"BackfillPercentWhereZero updated {updated} rows"); } catch { }
+                        // notify user on UI thread and refresh in-memory view
+                        Application.Current?.Dispatcher?.BeginInvoke((Action)(() =>
+                        {
+                            try { MessageBox.Show($"Backfilled {updated} rows (Price!=0 && Percent==0).", "Backfill Percent", MessageBoxButton.OK, MessageBoxImage.Information); } catch { }
+                            try { RefreshFromDb(); } catch { }
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        try { System.Diagnostics.Debug.WriteLine($"BackfillPercentCommand failed: {ex.Message}"); } catch { }
+                        Application.Current?.Dispatcher?.BeginInvoke((Action)(() =>
+                        {
+                            try { MessageBox.Show($"Backfill failed: {ex.Message}", "Backfill Percent", MessageBoxButton.OK, MessageBoxImage.Error); } catch { }
+                        }));
+                    }
+                });
+            });
+
             // CleanDbCommand, RemoveZeroPricesCommand and DeleteIsinCommand removed from ViewModel
 
             InitializeStocks();
@@ -281,6 +300,8 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         private DispatcherTimer _serverHeartbeatTimer;
         private DateTime? _lastServerHeartbeat;
         public DateTime? LastServerHeartbeat => _lastServerHeartbeat;
+        // Timer to poll DB for new rows when an external server is running
+        private DispatcherTimer _dbRefreshTimer;
 
         private void OpenSettings()
         {
@@ -310,27 +331,6 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
                     providersVm.Load(holdings);
                     vm.ProvidersVM = providersVm;
                 }
-
-        private async Task StartServerHeartbeatWatcher()
-        {
-            await Task.Yield();
-            try
-            {
-                _serverHeartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-                _serverHeartbeatTimer.Tick += (s, e) =>
-                {
-                    try
-                    {
-                        var hb = _serverControl.GetLastHeartbeat();
-                        _lastServerHeartbeat = hb;
-                        OnPropertyChanged(nameof(LastServerHeartbeat));
-                    }
-                    catch { }
-                };
-                _serverHeartbeatTimer.Start();
-            }
-            catch { }
-        }
                 catch { }
 
                 win.Content = view;
@@ -339,6 +339,73 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
                 win.WindowStartupLocation = WindowStartupLocation.CenterOwner;
                 win.ShowDialog();
             });
+        }
+
+        private async Task StartServerHeartbeatWatcher()
+        {
+            await Task.Yield();
+            try
+            {
+                // heartbeat timer: checks server heartbeat every 5s
+                _serverHeartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+
+                // DB refresh timer: always run every 5s so GUI picks up new DB rows
+                _dbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+                _dbRefreshTimer.Tick += (ss, ee) =>
+                {
+                    try { RefreshFromDb(); } catch (Exception ex) { try { System.Diagnostics.Debug.WriteLine($"RefreshFromDb tick failed: {ex.Message}"); } catch { } }
+                };
+
+                _serverHeartbeatTimer.Tick += (s, e) =>
+                {
+                    try
+                    {
+                        var hb = _serverControl.GetLastHeartbeat();
+                        _lastServerHeartbeat = hb;
+                        OnPropertyChanged(nameof(LastServerHeartbeat));
+
+                        // if server heartbeat is recent, ensure we refresh DB every 5s
+                        bool serverAlive = false;
+                        try
+                        {
+                            if (hb.HasValue)
+                            {
+                                var age = DateTime.UtcNow - hb.Value.ToUniversalTime();
+                                serverAlive = age <= TimeSpan.FromSeconds(10);
+                            }
+                        }
+                        catch { }
+
+                        // no-op: DB refresh continues independently of heartbeat
+                    }
+                    catch { }
+                };
+                _serverHeartbeatTimer.Start();
+                // start DB refresh timer immediately
+                try { _dbRefreshTimer.Start(); } catch { }
+                // perform an immediate heartbeat check so we start refreshing DB without waiting for the first tick
+                try
+                {
+                    var hb = _serverControl.GetLastHeartbeat();
+                    _lastServerHeartbeat = hb;
+                    OnPropertyChanged(nameof(LastServerHeartbeat));
+
+                    bool serverAlive = false;
+                    try
+                    {
+                        if (hb.HasValue)
+                        {
+                            var age = DateTime.UtcNow - hb.Value.ToUniversalTime();
+                            serverAlive = age <= TimeSpan.FromSeconds(10);
+                        }
+                    }
+                    catch { }
+
+                    try { RefreshFromDb(); } catch { }
+                }
+                catch { }
+            }
+            catch { }
         }
 
         // update the polling stock list based on currently held positions
@@ -457,6 +524,24 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
             }
 
             LoadFromDb();
+
+            // If holdings/stocks are empty after loading DB, populate Stocks from available DB ISINs
+            try
+            {
+                if ((_stocks == null || _stocks.Count == 0) && PriceHistory != null && PriceHistory.Count > 0)
+                {
+                    lock (_stocks)
+                    {
+                        foreach (var k in PriceHistory.Keys)
+                        {
+                            if (_stocks.Any(s => string.Equals(s.isin_wkn, k, StringComparison.OrdinalIgnoreCase)))
+                                continue;
+                            _stocks.Add((k, string.Empty, TradeMVVM.Domain.StockType.Aktie));
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private async Task StartAsync()
@@ -721,6 +806,8 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         {
             _cts?.Cancel();
             _pollingService?.Dispose();
+            try { _serverHeartbeatTimer?.Stop(); } catch { }
+            try { _dbRefreshTimer?.Stop(); } catch { }
         }
 
         /// <summary>
@@ -733,9 +820,37 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         {
             try
             {
+                try { System.Diagnostics.Debug.WriteLine($"RefreshFromDb: lastDbLoadTime={_lastDbLoadTime:O}"); } catch { }
                 var newPoints = _repository.LoadSince(_lastDbLoadTime);
+                try { System.Diagnostics.Debug.WriteLine($"RefreshFromDb: loaded {newPoints?.Count ?? 0} new points"); } catch { }
                 if (newPoints == null || newPoints.Count == 0)
+                {
+                    // fallback: if in-memory history is empty, perform a full load to populate UI (handles startup mismatch)
+                    try
+                    {
+                        if ((PriceHistory == null) || PriceHistory.Keys.Count == 0)
+                        {
+                            try { System.Diagnostics.Debug.WriteLine("RefreshFromDb: performing full LoadAll fallback"); } catch { }
+                            var all = _repository.LoadAll();
+                            if (all != null && all.Count > 0)
+                            {
+                                lock (PriceHistory)
+                                {
+                                    foreach (var p in all)
+                                    {
+                                        if (string.IsNullOrWhiteSpace(p.ISIN)) continue;
+                                        if (!PriceHistory.ContainsKey(p.ISIN)) PriceHistory[p.ISIN] = new List<Tuple<DateTime, double>>();
+                                        PriceHistory[p.ISIN].Add(new Tuple<DateTime, double>(p.Time, p.Percent));
+                                    }
+                                }
+                                _lastDbLoadTime = all[all.Count - 1].Time;
+                                try { _lastBatchKeys = new HashSet<string>(all.Select(p => string.Concat(p.ISIN, "|", p.Time.Ticks.ToString(), "|", p.Price.ToString("R", System.Globalization.CultureInfo.InvariantCulture), "|", p.Percent.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))); } catch { }
+                            }
+                        }
+                    }
+                    catch { }
                     return;
+                }
 
                 var changedIsins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var currentBatchKeys = new HashSet<string>(StringComparer.Ordinal);

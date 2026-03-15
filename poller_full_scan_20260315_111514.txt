@@ -1,0 +1,75 @@
+Full scan started 2026-03-15T11:15:14.7572755Z
+ISIN=DE000HC64J94 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000HC64J94/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000HM07U97 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000HM07U97/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000HT463X3 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000HT463X3/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000PC2FTR7 price=2,79 percent=0 provider=BNP
+ISIN=DE000PC3DVW6 price=10,94 percent=0 provider=BNP
+ISIN=DE000PC8MVU0 price=8,07 percent=0 provider=BNP
+ISIN=DE000PC98FB0 price=1,79 percent=0 provider=BNP
+ISIN=DE000PD39445 price=15,46 percent=0 provider=BNP
+ISIN=DE000PD9G6E0 price=10,13 percent=0 provider=BNP
+ISIN=DE000PE7CC69 price=9,5 percent=0 provider=BNP
+ISIN=DE000PE7YY00 price=6,68 percent=0 provider=BNP
+ISIN=DE000PE96JN7 price=15,4 percent=0 provider=BNP
+ISIN=DE000PE96JP2 price=15,98 percent=0 provider=BNP
+ISIN=DE000PF07XU7 price=9,6 percent=0 provider=BNP
+ISIN=DE000PF0X5R7 price=10,33 percent=0 provider=BNP
+ISIN=DE000PF2UN41 price=2,23 percent=0 provider=BNP
+ISIN=DE000PF4HEP2 price=21,06 percent=0 provider=BNP
+ISIN=DE000PG03ZC7 price=1,54 percent=0 provider=BNP
+ISIN=DE000PG03ZE3 price=1,64 percent=0 provider=BNP
+ISIN=DE000PG0WJV5 price=0,55 percent=0 provider=BNP
+ISIN=DE000PG0WPX8 price=4,74 percent=0 provider=BNP
+ISIN=DE000PG15BV2 price=7 percent=0 provider=BNP
+ISIN=DE000PG161G3 price=1,39 percent=0 provider=BNP
+ISIN=DE000PG171L2 price=5,28 percent=0 provider=BNP
+ISIN=DE000PG20PJ7 price=5,03 percent=0 provider=BNP
+ISIN=DE000PG2Y408 price=10,67 percent=0 provider=BNP
+ISIN=DE000PG3DLG6 price=9,01 percent=0 provider=BNP
+ISIN=DE000PG3K3V4 price=17,11 percent=0 provider=BNP
+ISIN=DE000PG3MWD1 price=2,91 percent=0 provider=BNP
+ISIN=DE000PG3XPN1 price=4,24 percent=0 provider=BNP
+ISIN=DE000PH1JZN2 price=11,72 percent=0 provider=BNP
+ISIN=DE000PH5X4P5 price=2,36 percent=0 provider=BNP
+ISIN=DE000PH88FT2 price=7,67 percent=0 provider=BNP
+ISIN=DE000PJ01SA4 price=2,73 percent=0 provider=BNP
+ISIN=DE000PJ0T1L7 price=10,13 percent=0 provider=BNP
+ISIN=DE000PJ0UAX1 price=52,34 percent=0 provider=BNP
+ISIN=DE000PJ1E1W0 price=17,14 percent=0 provider=BNP
+ISIN=DE000PJ1GAU4 price=33,08 percent=0 provider=BNP
+ISIN=DE000PJ1N566 price=8,56 percent=0 provider=BNP
+ISIN=DE000PJ23XE0 price=2,27 percent=0 provider=BNP
+ISIN=DE000PJ33K43 price=2,47 percent=0 provider=BNP
+ISIN=DE000PJ38QJ1 price=3,59 percent=0 provider=BNP
+ISIN=DE000PJ39426 price=9,51 percent=0 provider=BNP
+ISIN=DE000PJ3MNC9 price=5,45 percent=0 provider=BNP
+ISIN=DE000PJ3TRJ0 price=5,3 percent=0 provider=BNP
+ISIN=DE000PJ51QW7 price=4,79 percent=0 provider=BNP
+ISIN=DE000PJ5EC68 price=1,25 percent=0 provider=BNP
+ISIN=DE000PJ60ZJ6 price=4,42 percent=0 provider=BNP
+ISIN=DE000PJ6MQ87 price=4,23 percent=0 provider=BNP
+ISIN=DE000PJ6V1E2 price=8,82 percent=0 provider=BNP
+ISIN=DE000PJ7J0N0 price=4,31 percent=0 provider=BNP
+ISIN=DE000PJ80X57 price=18,08 percent=0 provider=BNP
+ISIN=DE000PJ83W63 price=5,26 percent=0 provider=BNP
+ISIN=DE000PK1HGV4 price=20,48 percent=0 provider=BNP
+ISIN=DE000PK36NK8 price=23,29 percent=0 provider=BNP
+ISIN=DE000PK3CE68 price=5,83 percent=0 provider=BNP
+ISIN=DE000PK3R5R2 price=1,97 percent=0 provider=BNP
+ISIN=DE000PK4WYF3 price=2,09 percent=0 provider=BNP
+ISIN=DE000PK5QAE5 price=17,3 percent=0 provider=BNP
+ISIN=DE000PK6F8Y3 price=0,93 percent=0 provider=BNP
+ISIN=DE000PL0WJF1 price=3,23 percent=0 provider=BNP
+ISIN=DE000PN1CBG4 price=10,49 percent=0 provider=BNP
+ISIN=DE000PN2W9V4 price=6,74 percent=0 provider=BNP
+ISIN=DE000PN97SJ5 price=4,14 percent=0 provider=BNP
+ISIN=DE000PZ1KK86 price=6,2 percent=0 provider=BNP
+ISIN=DE000TT1QZR0 price=NaN percent=NaN provider=BNP
+Full scan finished 2026-03-15T11:15:56.7704030Z elapsed=00:00:42.7326392
+Checked=66 Failed=4

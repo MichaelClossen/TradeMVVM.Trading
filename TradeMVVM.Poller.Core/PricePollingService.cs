@@ -117,7 +117,9 @@ namespace TradeMVVM.Poller.Core
 
                                         // pass through name when available
                                         var name = s.name;
+                                        try { Console.WriteLine($"PricePolling: fetching {s.isin} (name='{name}') attempt {attempt}"); } catch { }
                                         result = await _provider.DataProvider(s.isin, s.type, name, token);
+                                        try { Console.WriteLine($"PricePolling: received {s.isin} -> price={result.price} percent={result.percent} provider={result.provider}"); } catch { }
                                         success = true;
                                         break;
                                     }
@@ -181,8 +183,9 @@ namespace TradeMVVM.Poller.Core
                                 _nanFailureCounts.TryRemove(s.isin, out _);
                                 try { _dbService.DeleteFailureCount(s.isin, "price_nan"); } catch { }
 
-                                // Wenn Prozent fehlt oder ungültig: berechne aus letztem DB-Preis oder setze 0
-                                if (double.IsNaN(percent) || double.IsInfinity(percent))
+                                // Wenn Prozent fehlt, ungültig oder 0 obwohl sich der Preis geändert hat:
+                                // berechne aus letztem DB-Preis oder setze 0
+                                if (double.IsNaN(percent) || double.IsInfinity(percent) || percent == 0.0)
                                 {
                                     try
                                     {
@@ -190,10 +193,15 @@ namespace TradeMVVM.Poller.Core
                                         if (dbRows != null && dbRows.Count > 0)
                                         {
                                             var lastDbPrice = dbRows[dbRows.Count - 1].Price;
-                                            if (lastDbPrice != 0 && !double.IsNaN(price) && !double.IsInfinity(price))
+                                            if (lastDbPrice != 0 && !double.IsNaN(price) && !double.IsInfinity(price) && Math.Abs(price - lastDbPrice) > 1e-9)
+                                            {
                                                 percent = (price - lastDbPrice) / lastDbPrice * 100.0;
+                                            }
                                             else
+                                            {
+                                                // leave as 0.0 when no previous price or no meaningful change
                                                 percent = 0.0;
+                                            }
                                         }
                                         else
                                         {
@@ -346,14 +354,20 @@ namespace TradeMVVM.Poller.Core
                 // write heartbeat and check DB control flag
                 try
                 {
-                    _coreDbService?.SetHeartbeat(DateTime.UtcNow);
-
-                    // if polling disabled in DB, wait and continue
-                    if (_coreDbService != null && !_coreDbService.IsPollingEnabled())
+                    try
                     {
-                        try { await Task.Delay(TimeSpan.FromSeconds(5), token); } catch { }
-                        continue;
+                        // check DB control flag first; if disabled, do not write heartbeat and sleep briefly
+                        if (_coreDbService != null && !_coreDbService.IsPollingEnabled())
+                        {
+                            try { Console.WriteLine($"Poller paused by DB flag at {DateTime.UtcNow:O}"); } catch { }
+                            try { await Task.Delay(TimeSpan.FromSeconds(5), token); } catch { }
+                            continue;
+                        }
+
+                        _coreDbService?.SetHeartbeat(DateTime.UtcNow);
+                        try { Console.WriteLine($"Poller heartbeat: {DateTime.UtcNow:O}"); } catch { }
                     }
+                    catch { }
 
                     // add randomized jitter to avoid synchronized polling patterns
                     try

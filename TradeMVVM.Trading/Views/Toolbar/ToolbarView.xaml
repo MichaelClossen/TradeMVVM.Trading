@@ -9,18 +9,12 @@
         <StackPanel Orientation="Horizontal"
                     VerticalAlignment="Center">
 
-            <Button Content="Start"
-                    Command="{Binding StartCommand}"
-                    Width="70"
-                    Margin="2"/>
+            <!-- Server start/stop removed from GUI; toolbar shows server status only -->
 
-            <Button Content="Stop"
-                    Command="{Binding StopCommand}"
-                    Width="70"
-                    Margin="2"/>
-
-            <Button Content="Server Start" Command="{Binding ServerStartCommand}" Width="90" Margin="2"/>
-            <Button Content="Server Stop" Command="{Binding ServerStopCommand}" Width="90" Margin="2"/>
+            <StackPanel Orientation="Vertical" Margin="8,0,0,0" VerticalAlignment="Center">
+                <TextBlock x:Name="TxtPollingEnabled" Foreground="White" FontSize="11" Text="Polling: ?" />
+                <TextBlock x:Name="TxtLastHeartbeat" Foreground="LightGray" FontSize="11" Text="Heartbeat: -" />
+            </StackPanel>
 
             <Button Content="Kill Chrome"
                     Width="90"
@@ -99,8 +93,11 @@
 
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
                 <Button Content="Clear DB" Command="{Binding ClearDbCommand}" Width="70" Margin="2"/>
+                <Button Content="DB Cleanup" Width="90" Margin="2" Click="DbCleanupButton_Click"/>
+                <Button Content="Fix %0" Command="{Binding BackfillPercentCommand}" Width="90" Margin="2"/>
                 <Button Content="Preferences" Command="{Binding OpenSettingsCommand}" Width="90" Margin="8,2,2,2"/>
                 <Button Content="Default" Width="75" Margin="2" Click="ResetLayoutDefaultsButton_Click"/>
+                <Button Content="Diag" Width="60" Margin="6,2,2,2" Click="BtnDiag_Click"/>
             </StackPanel>
 
         </StackPanel>

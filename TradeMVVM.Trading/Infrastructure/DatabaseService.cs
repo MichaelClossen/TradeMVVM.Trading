@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Threading;
+using System.Threading.Tasks;
 using TradeMVVM.Domain;
 using System.Globalization;
 using System.IO;
@@ -12,6 +13,7 @@ namespace TradeMVVM.Trading.Services
     public class DatabaseService
     {
         private readonly string _connection;
+        private static int _summaryScheduled = 0;
         private const int DbLockedRetryCount = 5;
         private static readonly TimeSpan LoadByIsinCacheTtl = TimeSpan.FromSeconds(5);
         private static readonly object _initLock = new object();
@@ -210,6 +212,25 @@ namespace TradeMVVM.Trading.Services
 
         private string ComputeConnectionString()
         {
+            try
+            {
+                var env = Environment.GetEnvironmentVariable("TRADE_DB_CONNECTION");
+                if (!string.IsNullOrWhiteSpace(env))
+                {
+                    // allow full connection string or sqlite DSN
+                    return env;
+                }
+            }
+            catch { }
+
+            // Default to the absolute development DB path so GUI and server share the same file during development
+            try
+            {
+                var dev = Path.Combine("C:", "Users", "micha", "Desktop", "Trade", "trading.db");
+                return $"Data Source={dev}";
+            }
+            catch { }
+
             // Prior versions stored trading.db in the app folder or in a 'Data' subfolder.
             var candidates = new List<string>();
 
@@ -300,40 +321,51 @@ namespace TradeMVVM.Trading.Services
             }
             catch { }
 
-            // Log DB path and a quick summary (row count, min/max times) to help verify app uses expected file
+            // Log DB path and a quick summary (row count, min/max times) asynchronously to avoid blocking UI startup.
             try
             {
-                var csb = new SQLiteConnectionStringBuilder(_connection);
-                var dbFile = csb.DataSource;
-                try { Trace.TraceInformation($"DatabaseService: using DB file '{dbFile}'"); } catch { }
-
-                using (var conn = new SQLiteConnection(_connection))
+                if (System.Threading.Interlocked.CompareExchange(ref _summaryScheduled, 1, 0) == 0)
                 {
-                    conn.Open();
-                    try
+                    var connStr = _connection;
+                    Task.Run(() =>
                     {
-                        using (var c = new SQLiteCommand("SELECT COUNT(*) FROM Prices;", conn))
+                        try
                         {
-                            var cnt = Convert.ToInt32(c.ExecuteScalar());
-                            Trace.TraceInformation($"DatabaseService: Prices rows={cnt}");
-                        }
-                    }
-                    catch { }
+                            var csb = new SQLiteConnectionStringBuilder(connStr);
+                            var dbFile = csb.DataSource;
+                            try { Trace.TraceInformation($"DatabaseService: using DB file '{dbFile}'"); } catch { }
 
-                    try
-                    {
-                        using (var c2 = new SQLiteCommand("SELECT MIN(Time), MAX(Time) FROM Prices;", conn))
-                        using (var r = c2.ExecuteReader())
-                        {
-                            if (r.Read())
+                            using (var conn = new SQLiteConnection(connStr))
                             {
-                                var min = r.IsDBNull(0) ? "NULL" : r.GetValue(0).ToString();
-                                var max = r.IsDBNull(1) ? "NULL" : r.GetValue(1).ToString();
-                                Trace.TraceInformation($"DatabaseService: Prices time range: min={min} max={max}");
+                                conn.Open();
+                                try
+                                {
+                                    using (var c = new SQLiteCommand("SELECT COUNT(*) FROM Prices;", conn))
+                                    {
+                                        var cnt = Convert.ToInt32(c.ExecuteScalar());
+                                        Trace.TraceInformation($"DatabaseService: Prices rows={cnt}");
+                                    }
+                                }
+                                catch { }
+
+                                try
+                                {
+                                    using (var c2 = new SQLiteCommand("SELECT MIN(Time), MAX(Time) FROM Prices;", conn))
+                                    using (var r = c2.ExecuteReader())
+                                    {
+                                        if (r.Read())
+                                        {
+                                            var min = r.IsDBNull(0) ? "NULL" : r.GetValue(0).ToString();
+                                            var max = r.IsDBNull(1) ? "NULL" : r.GetValue(1).ToString();
+                                            Trace.TraceInformation($"DatabaseService: Prices time range: min={min} max={max}");
+                                        }
+                                    }
+                                }
+                                catch { }
                             }
                         }
-                    }
-                    catch { }
+                        catch { }
+                    });
                 }
             }
             catch { }
@@ -710,6 +742,91 @@ namespace TradeMVVM.Trading.Services
             }
 
             InvalidateLoadByIsinCache(isin);
+        }
+
+        // Backfill Percent values for rows where Price != 0 but Percent is 0 or NULL.
+        // Returns number of rows updated.
+        public int BackfillPercentWhereZero()
+        {
+            int updated = 0;
+            try
+            {
+                using (var conn = new SQLiteConnection(_connection))
+                {
+                    conn.Open();
+
+                    // get distinct ISINs to process
+                    var isins = new List<string>();
+                    using (var isinsCmd = new SQLiteCommand("SELECT DISTINCT ISIN FROM Prices;", conn))
+                    using (var r = isinsCmd.ExecuteReader())
+                    {
+                        while (r.Read())
+                        {
+                            if (!r.IsDBNull(0))
+                                isins.Add(r.GetString(0));
+                        }
+                    }
+
+                    // prepare commands
+                    using (var selectCmd = new SQLiteCommand("SELECT rowid, Price, Percent FROM Prices WHERE ISIN = @isin ORDER BY Time ASC;", conn))
+                    using (var updateCmd = new SQLiteCommand("UPDATE Prices SET Percent = @percent WHERE rowid = @rowid;", conn))
+                    {
+                        var pIsin = selectCmd.Parameters.AddWithValue("@isin", string.Empty);
+                        var pPercent = updateCmd.Parameters.AddWithValue("@percent", 0.0);
+                        var pRow = updateCmd.Parameters.AddWithValue("@rowid", 0L);
+
+                        foreach (var isin in isins)
+                        {
+                            pIsin.Value = isin ?? string.Empty;
+                            double? lastPrice = null;
+                            using (var reader = selectCmd.ExecuteReader())
+                            {
+                                while (reader.Read())
+                                {
+                                    var rowid = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                                    var price = reader.IsDBNull(1) ? 0.0 : reader.GetDouble(1);
+                                    double percent = reader.IsDBNull(2) ? double.NaN : reader.GetDouble(2);
+
+                                    if (price != 0.0 && (double.IsNaN(percent) || percent == 0.0))
+                                    {
+                                        double newPercent = 0.0;
+                                        if (lastPrice.HasValue && lastPrice.Value != 0.0)
+                                        {
+                                            newPercent = (price - lastPrice.Value) / lastPrice.Value * 100.0;
+                                        }
+
+                                        // only perform update if value differs (avoid touching unchanged rows)
+                                        if (double.IsNaN(percent) || Math.Abs(newPercent - percent) > 1e-9)
+                                        {
+                                            pPercent.Value = newPercent;
+                                            pRow.Value = rowid;
+                                            try
+                                            {
+                                                var affected = updateCmd.ExecuteNonQuery();
+                                                if (affected > 0) updated += affected;
+                                            }
+                                            catch { }
+                                        }
+                                    }
+
+                                    // advance lastPrice if current price is non-zero
+                                    if (price != 0.0)
+                                        lastPrice = price;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"DB: BackfillPercentWhereZero failed: {ex.Message}");
+            }
+
+            if (updated > 0)
+                InvalidateLoadByIsinCache();
+
+            return updated;
         }
 
         public void RemoveZeroOrNullPrices()

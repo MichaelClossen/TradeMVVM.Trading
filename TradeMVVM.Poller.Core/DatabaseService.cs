@@ -16,7 +16,9 @@ namespace TradeMVVM.Poller.Core
         {
             // allow overriding via environment variable or appsettings when hosted
             var env = Environment.GetEnvironmentVariable("TRADE_DB_CONNECTION");
-            _connection = string.IsNullOrWhiteSpace(env) ? "Data Source=trading.db" : env;
+            // default to absolute path in workspace so GUI and Server use the same DB file
+            var defaultPath = @"Data Source=C:\Users\micha\Desktop\Trade\trading.db";
+            _connection = string.IsNullOrWhiteSpace(env) ? defaultPath : env;
             // detect provider: simple heuristic - if connection string contains "Host=" or "Username=" assume Postgres
             _usePostgres = !string.IsNullOrWhiteSpace(env) && (env.Contains("Host=", StringComparison.OrdinalIgnoreCase) || env.Contains("Username=", StringComparison.OrdinalIgnoreCase));
 
@@ -401,7 +403,8 @@ namespace TradeMVVM.Poller.Core
                     using var conn = new NpgsqlConnection(_connection);
                     conn.Open();
                     using var cmd = new NpgsqlCommand("UPDATE PollingControl SET LastHeartbeat = @t WHERE Id = 1;", conn);
-                    cmd.Parameters.AddWithValue("@t", dt);
+                    // store as local time so DB shows the same human-readable time as the poller process
+                    cmd.Parameters.AddWithValue("@t", dt.ToLocalTime());
                     cmd.ExecuteNonQuery();
                 }
                 else
@@ -409,7 +412,8 @@ namespace TradeMVVM.Poller.Core
                     using var conn = new SQLiteConnection(_connection);
                     conn.Open();
                     using var cmd = new SQLiteCommand("UPDATE PollingControl SET LastHeartbeat = @t WHERE Id = 1;", conn);
-                    cmd.Parameters.AddWithValue("@t", dt);
+                    // store canonical local ISO-8601 string so DB shows the same local time as the poller process
+                    cmd.Parameters.AddWithValue("@t", dt.ToLocalTime().ToString("o"));
                     cmd.ExecuteNonQuery();
                 }
             }

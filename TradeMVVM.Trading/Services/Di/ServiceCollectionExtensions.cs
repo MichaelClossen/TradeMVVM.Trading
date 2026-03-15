@@ -14,6 +14,9 @@ namespace TradeMVVM.Trading.Services.Di
                 Timeout = TimeSpan.FromSeconds(8)
             });
 
+            // Server control service (shared instance) so UI components use the same DB control object
+            services.AddSingleton<Services.ServerControlService>();
+
             // throttle — separate throttles so slow Selenium (Gettex) does not starve fast HTTP (BNP)
             var bnpThrottle = new System.Threading.SemaphoreSlim(4);
             var gettexThrottle = new System.Threading.SemaphoreSlim(1);
