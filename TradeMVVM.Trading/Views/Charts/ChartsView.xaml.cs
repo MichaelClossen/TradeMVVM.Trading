@@ -62,11 +62,16 @@ namespace TradeMVVM.Trading.Views.Charts
                     {
                         var inRange = hist.Where(t => t.Item1 >= visMin.Value && t.Item1 <= visMax.Value).OrderBy(t => t.Item1).ToList();
                         var compressed = new List<Tuple<DateTime, double>>();
+
+                        // For short visible spans prefer to keep all DB samples (avoid aggressive compression)
+                        var span = visMax.Value - visMin.Value;
+                        bool keepAll = span <= TimeSpan.FromHours(1);
+
                         double? lastVal = null;
                         foreach (var pt in inRange)
                         {
                             var displayVal = pt.Item2 / 1000.0; // convert € -> k€ for display
-                            if (lastVal.HasValue && Math.Abs(lastVal.Value - displayVal) < 1e-9)
+                            if (!keepAll && lastVal.HasValue && Math.Abs(lastVal.Value - displayVal) < 1e-9)
                                 continue;
                             compressed.Add(new Tuple<DateTime, double>(pt.Item1, displayVal));
                             lastVal = displayVal;
@@ -367,8 +372,11 @@ namespace TradeMVVM.Trading.Views.Charts
             };
 
             _stockChartManager = new ChartManager(PlotStocks, "Aktien / ETFs");
+            try { _stockChartManager.ForceScatter = true; } catch { }
             _stockTopChartManager = new ChartManager(PlotStocksTop, "Aktien / ETFs (Top)");
+            try { _stockTopChartManager.ForceScatter = true; } catch { }
             _knockoutChartManager = new ChartManager(PlotKnockouts, "Knockouts");
+            try { _knockoutChartManager.ForceScatter = true; } catch { }
             try
             {
                 // For the top stocks plot use k€ as left axis label (values are plotted in thousands)
@@ -442,26 +450,10 @@ namespace TradeMVVM.Trading.Views.Charts
                         }
                         catch { }
 
-                        lock (_stockTopData)
-                        {
-                            if (!_stockTopData.TryGetValue(key, out var list))
-                            {
-                                list = new List<Tuple<DateTime, double>>();
-                                _stockTopData[key] = list;
-                            }
-                            var now = DateTime.Now;
-                            var displayValue = value / 1000.0; // convert € -> k€ for display
-                            list.Add(new Tuple<DateTime, double>(now, displayValue));
-                            // persist the point into TotalPLHistory table as TotalPL (keep legacy column name)
-                            // persist point in poller DB helper if available (backwards compatible)
-                            try
-                            {
-                                // insert into Trading DB TotalPLHistory table for chart history
-                                try { var db = new DatabaseService(); db.InsertTotalPLHistory(now, value); } catch { }
-                            }
-                            catch { }
-                            // intentionally keep all points (do not trim) per user request
-                        }
+                        // The top-plot must be populated exclusively from DB TotalPLHistory entries
+                        // maintained by the server. Do not insert or synthesize PL history points
+                        // on the GUI side. Request a refresh of the DB-backed top-plot history.
+                        try { LoadTopPlotHistoryForVisibleRange(); } catch { }
 
                         try
                         {
@@ -478,6 +470,41 @@ namespace TradeMVVM.Trading.Views.Charts
                                     visMax = DateTime.FromOADate(maxX);
                                     visMinOa = minX;
                                     visMaxOa = maxX;
+                                }
+                            }
+                            catch { }
+
+                            // If the visible timespan is very short (1m or 5m), increase update frequency
+                            // and prefer line rendering (no overlay scatter markers) so the top chart
+                            // appears as a continuous line. Otherwise keep default behavior.
+                            try
+                            {
+                                if (visMin.HasValue && visMax.HasValue)
+                                {
+                                    var span = visMax.Value - visMin.Value;
+                                if (span <= TimeSpan.FromMinutes(1))
+                                {
+                                    // very small span: update often
+                                    try { _topPlotTimer.Interval = TimeSpan.FromSeconds(2); } catch { }
+                                    // force explicit Xs so short-range high-frequency samples are not decimated
+                                    try { _stockTopChartManager.ForceScatter = true; } catch { }
+                                }
+                                else if (span <= TimeSpan.FromMinutes(5))
+                                {
+                                    try { _topPlotTimer.Interval = TimeSpan.FromSeconds(5); } catch { }
+                                    try { _stockTopChartManager.ForceScatter = true; } catch { }
+                                }
+                                else if (span <= TimeSpan.FromHours(1))
+                                {
+                                    // for up to 1 hour visible span keep explicit points so the top plot shows available DB samples
+                                    try { _topPlotTimer.Interval = TimeSpan.FromSeconds(30); } catch { }
+                                    try { _stockTopChartManager.ForceScatter = true; } catch { }
+                                }
+                                else
+                                {
+                                    try { _topPlotTimer.Interval = TimeSpan.FromSeconds(30); } catch { }
+                                    try { _stockTopChartManager.ForceScatter = false; } catch { }
+                                }
                                 }
                             }
                             catch { }
@@ -510,11 +537,15 @@ namespace TradeMVVM.Trading.Views.Charts
 
                                         // compress consecutive identical values into single sample
                                         var compressed = new List<Tuple<DateTime, double>>();
+
+                                        var spanLocal = visMax.Value - visMin.Value;
+                                        bool keepAllLocal = spanLocal <= TimeSpan.FromHours(1);
+
                                         double? lastVal = null;
                                         foreach (var pt in inRange)
                                         {
                                             var displayVal = pt.Item2 / 1000.0; // convert € -> k€ for display
-                                            if (lastVal.HasValue && Math.Abs(lastVal.Value - displayVal) < 1e-9)
+                                            if (!keepAllLocal && lastVal.HasValue && Math.Abs(lastVal.Value - displayVal) < 1e-9)
                                                 continue;
                                             compressed.Add(new Tuple<DateTime, double>(pt.Item1, displayVal));
                                             lastVal = displayVal;
@@ -755,32 +786,62 @@ namespace TradeMVVM.Trading.Views.Charts
                 // Whenever TxtTotalPL is updated, mirror it into the top area label (display in €)
             try
             {
-                // Use dispatcher timer to poll for changes to TxtTotalPL.Text and update TxtTotalPLTop accordingly.
-                // This avoids wiring into many potential update paths.
+                // Use dispatcher timer to update the top-area PL label from the DB's TotalPLHistory.
+                // The top display must reflect the server-written DB value (single source of truth).
                 var mirrorTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
                 string lastText = null;
                 mirrorTimer.Tick += (s, e) =>
                 {
                     try
                     {
+                        try
+                        {
+                            var db = new DatabaseService();
+                            var hist = db.LoadTotalPLHistory();
+                            if (hist != null && hist.Count > 0)
+                            {
+                                var lastItem = hist[hist.Count - 1];
+                                var last = lastItem.Item2; // value in €
+                                var lastTime = lastItem.Item1;
+                                TxtTotalPLTop.Text = string.Format(CultureInfo.GetCultureInfo("de-DE"), "{0:0.00} €", last);
+                                TxtTotalPLTop.Foreground = last >= 0 ? PositivePlBrush : NegativePlBrush;
+
+                                // ensure the top-plot series contains the latest DB point so the graph shows
+                                // the most recent value immediately (do not wait for the slower topPlotTimer)
+                                try
+                                {
+                                    // convert to k€ as used by top plot
+                                    var displayVal = last / 1000.0;
+                                    lock (_stockTopData)
+                                    {
+                                        if (!_stockTopData.TryGetValue("zero", out var list) || list == null)
+                                            list = new List<Tuple<DateTime, double>>();
+
+                                        // append if newer than last stored point to avoid duplicates
+                                        if (list.Count == 0 || list[list.Count - 1].Item1 < lastTime)
+                                        {
+                                            list.Add(new Tuple<DateTime, double>(lastTime, displayVal));
+                                            _stockTopData["zero"] = list;
+                                        }
+                                    }
+                                    try { _stockTopChartManager.Render(_stockTopData); } catch { }
+                                    try { PlotStocksTop.Refresh(); } catch { }
+                                }
+                                catch { }
+
+                                // remember to avoid unnecessary UI churn
+                                lastText = TxtTotalPL?.Text ?? string.Empty;
+                                return;
+                            }
+                        }
+                        catch { }
+
+                        // fallback: if no DB value available, mirror the left label as before
                         var cur = TxtTotalPL?.Text ?? string.Empty;
                         if (cur != lastText)
                         {
                             lastText = cur;
-                            // convert to k€ display: try parse number and divide by 1000 if possible
-                            try
-                            {
-                                var txt = cur.Replace("€", string.Empty).Replace("k€", string.Empty).Trim();
-                                if (double.TryParse(txt, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.GetCultureInfo("de-DE"), out var eur))
-                                {
-                                    TxtTotalPLTop.Text = string.Format(System.Globalization.CultureInfo.GetCultureInfo("de-DE"), "{0:0.00} €", eur);
-                                }
-                                else
-                                {
-                                    TxtTotalPLTop.Text = cur;
-                                }
-                            }
-                            catch { TxtTotalPLTop.Text = cur; }
+                            try { TxtTotalPLTop.Text = cur; } catch { }
                         }
                     }
                     catch { }

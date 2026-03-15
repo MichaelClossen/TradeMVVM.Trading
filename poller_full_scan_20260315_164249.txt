@@ -1,0 +1,4 @@
+Full scan started 2026-03-15T16:42:49.0105202Z
+ISIN=DE000HC64J94 price=NaN percent=NaN provider=BNP
+Full scan finished 2026-03-15T16:42:49.9422942Z elapsed=00:00:01.6585652
+Checked=1 Failed=1

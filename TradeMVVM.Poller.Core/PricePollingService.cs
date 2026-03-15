@@ -312,6 +312,13 @@ namespace TradeMVVM.Poller.Core
                                     Debug.WriteLine($"PricePolling: failed to insert point for {s.isin}: {ex.Message}");
                                 }
 
+                                // Update heartbeat more frequently so GUI shows activity even during long cycles
+                                try
+                                {
+                                    _coreDbService?.SetHeartbeat(DateTime.UtcNow);
+                                }
+                                catch { }
+
                                 // successful retrieval and store
                             }
                             catch (Exception ex)

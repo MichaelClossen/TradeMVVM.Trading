@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Windows.Controls;
 using System.IO;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls.Primitives;
@@ -14,15 +15,24 @@ namespace TradeMVVM.Trading.Views.Toolbar
     public partial class ToolbarView : UserControl
     {
         private System.Windows.Threading.DispatcherTimer _statusTimer;
-        private readonly TimeSpan _statusInterval = TimeSpan.FromSeconds(1);
+        private System.Threading.Timer _backgroundStatusTimer;
+        private readonly TimeSpan _statusInterval = TimeSpan.FromSeconds(30);
+        // toggle flag: when true the next update attempt will set the text to Red; otherwise White
+        private bool _nextAttemptRed = true;
 
         public ToolbarView()
         {
             InitializeComponent();
+            try
+            {
+                var txtE = this.FindName("TxtPollingEnabled") as System.Windows.Controls.TextBlock;
+                if (txtE != null) txtE.Foreground = System.Windows.Media.Brushes.White;
+            }
+            catch { }
             Loaded += ToolbarView_Loaded;
             Unloaded += ToolbarView_Unloaded;
             // trigger an immediate status check once UI is initialized
-            try { Application.Current?.Dispatcher?.BeginInvoke(new Action(() => { try { Task.Run(() => UpdateServerStatusAsync()); } catch { } })); } catch { }
+            try { Task.Run(() => UpdateServerStatusAsync()); } catch { }
         }
 
         private void DbCleanupButton_Click(object sender, RoutedEventArgs e)
@@ -148,9 +158,26 @@ namespace TradeMVVM.Trading.Views.Toolbar
             try
             {
                 // start periodic status updates
+                // Start both a DispatcherTimer (for UI-thread aligned ticks) and a background timer
                 _statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = _statusInterval };
-                _statusTimer.Tick += async (s, ev) => { try { await Task.Run(() => UpdateServerStatusAsync()); } catch { } };
+                _statusTimer.Tick += (s, ev) =>
+                {
+                    try { Trace.WriteLine($"Toolbar: dispatcher tick at {DateTime.Now:O}"); } catch { }
+                    UpdateServerStatus();
+                };
                 _statusTimer.Start();
+
+                // Background timer as a fallback to ensure periodic updates even if DispatcherTimer is paused
+                try
+                {
+                    _backgroundStatusTimer?.Dispose();
+                    _backgroundStatusTimer = new System.Threading.Timer(_ =>
+                    {
+                        try { Trace.WriteLine($"Toolbar: background timer callback at {DateTime.Now:O}"); } catch { }
+                        Application.Current?.Dispatcher?.BeginInvoke(new Action(() => { try { UpdateServerStatus(); } catch { } }));
+                    }, null, TimeSpan.Zero, _statusInterval);
+                }
+                catch { }
                 // immediate lightweight status read to show times right away
                 try
                 {
@@ -189,6 +216,7 @@ namespace TradeMVVM.Trading.Views.Toolbar
                         if (txtE != null)
                         {
                             txtE.Text = $"Now: {now:yyyy-MM-dd HH:mm:ss}  •  Heartbeat: {(hbDisplay ?? "-")}";
+                            try { txtE.Foreground = System.Windows.Media.Brushes.White; } catch { }
                         }
                         if (txtH != null)
                         {
@@ -200,7 +228,7 @@ namespace TradeMVVM.Trading.Views.Toolbar
                 }
                 catch { }
 
-                try { _ = Task.Run(() => UpdateServerStatusAsync()); } catch { }
+                try { UpdateServerStatus(); } catch { }
             }
             catch { }
         }
@@ -214,6 +242,12 @@ namespace TradeMVVM.Trading.Views.Toolbar
                     _statusTimer.Stop();
                     _statusTimer = null;
                 }
+                try
+                {
+                    _backgroundStatusTimer?.Dispose();
+                    _backgroundStatusTimer = null;
+                }
+                catch { }
             }
             catch { }
         }
@@ -222,7 +256,8 @@ namespace TradeMVVM.Trading.Views.Toolbar
         {
             try
             {
-                Application.Current?.Dispatcher?.BeginInvoke(new Action(() => { try { UpdateServerStatusAsync(); } catch { } }));
+                // Run the status update on a background thread to avoid blocking the UI thread.
+                try { Task.Run(() => UpdateServerStatusAsync()); } catch { }
             }
             catch { }
         }
@@ -232,7 +267,21 @@ namespace TradeMVVM.Trading.Views.Toolbar
             try { Trace.WriteLine("Toolbar: UpdateServerStatusAsync entered"); } catch { }
             try
             {
-                var vm = DataContext as MainViewModel ?? Application.Current?.MainWindow?.DataContext as MainViewModel;
+                MainViewModel vm = null;
+                try
+                {
+                    // DataContext is a DependencyObject property; access it on the UI thread to avoid
+                    // InvalidOperationException when this method runs on a background thread.
+                    Application.Current?.Dispatcher?.Invoke(new Action(() =>
+                    {
+                        vm = this.DataContext as MainViewModel ?? Application.Current?.MainWindow?.DataContext as MainViewModel;
+                    }));
+                }
+                catch
+                {
+                    // best-effort fallback (shouldn't normally be reached)
+                    try { vm = this.DataContext as MainViewModel ?? Application.Current?.MainWindow?.DataContext as MainViewModel; } catch { vm = null; }
+                }
                 TradeMVVM.Trading.Services.ServerControlService svc = null;
                 try
                 {
@@ -245,6 +294,25 @@ namespace TradeMVVM.Trading.Views.Toolbar
 
                 DateTime? hb = null;
                 try { hb = svc.GetLastHeartbeat(); } catch { hb = null; }
+
+                // indicate update attempt by toggling the 'Now' line color between Red and White
+                try
+                {
+                    Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            var txtE = this.FindName("TxtPollingEnabled") as System.Windows.Controls.TextBlock ?? (this as dynamic).TxtPollingEnabled as System.Windows.Controls.TextBlock;
+                            if (txtE != null)
+                            {
+                                txtE.Foreground = _nextAttemptRed ? System.Windows.Media.Brushes.Red : System.Windows.Media.Brushes.White;
+                                _nextAttemptRed = !_nextAttemptRed;
+                            }
+                        }
+                        catch { }
+                    }));
+                }
+                catch { }
 
                 // always read raw DB value too so GUI shows exactly what's stored in the DB
                 string rawHeartbeat = null;

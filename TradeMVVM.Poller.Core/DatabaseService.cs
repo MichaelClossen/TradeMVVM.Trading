@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Linq;
 using System.Data.SQLite;
 using Npgsql;
 using TradeMVVM.Domain;
@@ -233,33 +234,127 @@ namespace TradeMVVM.Poller.Core
         {
             try
             {
+                // To avoid redundant consecutive historical rows: delete only trailing rows for this ISIN
+                // whose Price and Percent equal the new point (within EPS). Stop at the first non-equal row.
+                const double EPS = 1e-2;
                 if (_usePostgres)
                 {
                     using var conn = new NpgsqlConnection(_connection);
                     conn.Open();
-                    using var cmd = new NpgsqlCommand("INSERT INTO Prices (ISIN, Time, Price, Percent, Provider, ProviderTime, Forecast, PredictedPrice) VALUES (@isin, @time, @price, @percent, @provider, @providertime, @forecast, @predicted)", conn);
-                    cmd.Parameters.AddWithValue("@isin", point.ISIN);
-                    cmd.Parameters.AddWithValue("@time", point.Time);
-                    cmd.Parameters.AddWithValue("@price", point.Price);
-                    cmd.Parameters.AddWithValue("@percent", point.Percent);
-                    cmd.Parameters.AddWithValue("@provider", (object)point.Provider ?? string.Empty);
-                    cmd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@forecast", (object)point.Forecast ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@predicted", point.PredictedPrice);
-                    cmd.ExecuteNonQuery();
+                    using var tran = conn.BeginTransaction();
+                    try
+                    {
+                        // collect ctid values of trailing equal rows
+                        var toDelete = new List<string>();
+                        using (var sel = new NpgsqlCommand("SELECT ctid::text, Price, Percent FROM Prices WHERE ISIN = @isin ORDER BY Time DESC", conn, tran))
+                        {
+                            sel.Parameters.AddWithValue("@isin", point.ISIN);
+                            using var reader = sel.ExecuteReader();
+                            while (reader.Read())
+                            {
+                                var ctid = reader.IsDBNull(0) ? null : reader.GetString(0);
+                                double price = reader.IsDBNull(1) ? double.NaN : reader.GetDouble(1);
+                                double percent = reader.IsDBNull(2) ? double.NaN : reader.GetDouble(2);
+                                bool priceEq = !double.IsNaN(price) && !double.IsNaN(point.Price) ? Math.Abs(price - point.Price) <= EPS : (double.IsNaN(price) && double.IsNaN(point.Price));
+                                bool percentEq = !double.IsNaN(percent) && !double.IsNaN(point.Percent) ? Math.Abs(percent - point.Percent) <= EPS : (double.IsNaN(percent) && double.IsNaN(point.Percent));
+                                if (priceEq && percentEq && ctid != null)
+                                {
+                                    toDelete.Add(ctid);
+                                }
+                                else
+                                {
+                                    break; // stop at first non-equal row
+                                }
+                            }
+                        }
+
+                        if (toDelete.Count > 0)
+                        {
+                            // delete collected ctids
+                            // build IN list
+                            var inParam = string.Join(",", toDelete.Select((_, i) => $"@p{i}"));
+                            using var del = new NpgsqlCommand($"DELETE FROM Prices WHERE ctid IN ({inParam});", conn, tran);
+                            for (int i = 0; i < toDelete.Count; i++)
+                                del.Parameters.AddWithValue($"@p{i}", toDelete[i]);
+                            del.ExecuteNonQuery();
+                        }
+
+                        using var cmd = new NpgsqlCommand("INSERT INTO Prices (ISIN, Time, Price, Percent, Provider, ProviderTime, Forecast, PredictedPrice) VALUES (@isin, @time, @price, @percent, @provider, @providertime, @forecast, @predicted)", conn, tran);
+                        cmd.Parameters.AddWithValue("@isin", point.ISIN);
+                        cmd.Parameters.AddWithValue("@time", point.Time);
+                        cmd.Parameters.AddWithValue("@price", point.Price);
+                        cmd.Parameters.AddWithValue("@percent", point.Percent);
+                        cmd.Parameters.AddWithValue("@provider", (object)point.Provider ?? string.Empty);
+                        cmd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("@forecast", (object)point.Forecast ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("@predicted", point.PredictedPrice);
+                        cmd.ExecuteNonQuery();
+
+                        tran.Commit();
+                    }
+                    catch
+                    {
+                        try { tran.Rollback(); } catch { }
+                        throw;
+                    }
                 }
                 else
                 {
                     using var conn = new SQLiteConnection(_connection);
                     conn.Open();
-                    using var cmd = new SQLiteCommand("INSERT INTO Prices (ISIN, Time, Price, Percent, Provider, ProviderTime) VALUES (@isin, @time, @price, @percent, @provider, @providertime)", conn);
-                    cmd.Parameters.AddWithValue("@isin", point.ISIN);
-                    cmd.Parameters.AddWithValue("@time", point.Time);
-                    cmd.Parameters.AddWithValue("@price", point.Price);
-                    cmd.Parameters.AddWithValue("@percent", point.Percent);
-                    cmd.Parameters.AddWithValue("@provider", point.Provider ?? string.Empty);
-                    cmd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
-                    cmd.ExecuteNonQuery();
+                    using var tran = conn.BeginTransaction();
+                    try
+                    {
+                        // collect rowids of trailing equal rows
+                        var toDelete = new List<long>();
+                        using (var sel = new SQLiteCommand("SELECT rowid, Price, Percent FROM Prices WHERE ISIN = @isin ORDER BY Time DESC", conn, tran))
+                        {
+                            sel.Parameters.AddWithValue("@isin", point.ISIN);
+                            using var reader = sel.ExecuteReader();
+                            while (reader.Read())
+                            {
+                                var rowid = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                                double price = reader.IsDBNull(1) ? double.NaN : reader.GetDouble(1);
+                                double percent = reader.IsDBNull(2) ? double.NaN : reader.GetDouble(2);
+                                bool priceEq = !double.IsNaN(price) && !double.IsNaN(point.Price) ? Math.Abs(price - point.Price) <= EPS : (double.IsNaN(price) && double.IsNaN(point.Price));
+                                bool percentEq = !double.IsNaN(percent) && !double.IsNaN(point.Percent) ? Math.Abs(percent - point.Percent) <= EPS : (double.IsNaN(percent) && double.IsNaN(point.Percent));
+                                if (priceEq && percentEq && rowid > 0)
+                                {
+                                    toDelete.Add(rowid);
+                                }
+                                else
+                                {
+                                    break; // stop at first non-equal row
+                                }
+                            }
+                        }
+
+                        if (toDelete.Count > 0)
+                        {
+                            // delete collected rowids
+                            var inParam = string.Join(",", toDelete.Select((_, i) => $"@p{i}"));
+                            using var del = new SQLiteCommand($"DELETE FROM Prices WHERE rowid IN ({inParam});", conn, tran);
+                            for (int i = 0; i < toDelete.Count; i++)
+                                del.Parameters.AddWithValue($"@p{i}", toDelete[i]);
+                            del.ExecuteNonQuery();
+                        }
+
+                        using var cmd = new SQLiteCommand("INSERT INTO Prices (ISIN, Time, Price, Percent, Provider, ProviderTime) VALUES (@isin, @time, @price, @percent, @provider, @providertime)", conn, tran);
+                        cmd.Parameters.AddWithValue("@isin", point.ISIN);
+                        cmd.Parameters.AddWithValue("@time", point.Time);
+                        cmd.Parameters.AddWithValue("@price", point.Price);
+                        cmd.Parameters.AddWithValue("@percent", point.Percent);
+                        cmd.Parameters.AddWithValue("@provider", point.Provider ?? string.Empty);
+                        cmd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
+                        cmd.ExecuteNonQuery();
+
+                        tran.Commit();
+                    }
+                    catch
+                    {
+                        try { tran.Rollback(); } catch { }
+                        throw;
+                    }
                 }
             }
             catch (Exception ex)

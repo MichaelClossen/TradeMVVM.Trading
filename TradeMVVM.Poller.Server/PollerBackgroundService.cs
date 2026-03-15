@@ -28,6 +28,98 @@ internal class PollerBackgroundService : BackgroundService
         _http = http ?? new HttpClient();
     }
 
+    // compute Total P/L from holdings CSV and insert into TotalPLHistory (used by heartbeat)
+    private async Task ComputeAndInsertTotalPlAsync(CancellationToken token)
+    {
+        try
+        {
+            // run quickly and do not block caller; use Task.Run to avoid synchronous work on caller thread
+            await Task.Run(() =>
+            {
+                try
+                {
+                    var settings = new TradeMVVM.Trading.Services.SettingsService();
+                    var converter = new TradeMVVM.Trading.DataAnalysis.CurrencyConverter();
+                    double totalPlEur = 0.0;
+
+                    try
+                    {
+                        var csv = settings.HoldingsCsvPath;
+                        if (!string.IsNullOrWhiteSpace(csv) && System.IO.File.Exists(csv))
+                        {
+                            var holdings = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(csv);
+                            if (holdings != null && holdings.Count > 0)
+                            {
+                                foreach (var kv in holdings)
+                                {
+                                    try
+                                    {
+                                        var h = kv.Value;
+                                        double avgBuy = h.RemainingBoughtShares > 0 ? (h.RemainingBoughtAmount / h.RemainingBoughtShares) : double.NaN;
+                                        double lastPrice = double.NaN;
+                                        try
+                                        {
+                                            var rows = _repo.LoadByIsin(h.ISIN);
+                                            if (rows != null && rows.Count > 0)
+                                                lastPrice = rows[rows.Count - 1].Price;
+                                        }
+                                        catch { }
+
+                                        double unrealizedNative = 0.0;
+                                        if (!double.IsNaN(avgBuy) && !double.IsNaN(lastPrice) && !double.IsInfinity(lastPrice))
+                                        {
+                                            unrealizedNative = h.Shares * (lastPrice - avgBuy);
+                                        }
+
+                                        try { totalPlEur += converter.ConvertToEur(unrealizedNative, h.Currency ?? "EUR"); } catch { }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        var db = new TradeMVVM.Trading.Services.DatabaseService();
+                        var rounded = Math.Round(totalPlEur, 2);
+                        // avoid duplicate inserts: skip if the last stored sample is very recent and has the same rounded value
+                        try
+                        {
+                            var hist = db.LoadTotalPLHistory();
+                            if (hist != null && hist.Count > 0)
+                            {
+                                var last = hist[hist.Count - 1];
+                                var lastTime = last.Item1;
+                                var lastTotal = last.Item2;
+                                if (Math.Abs((DateTime.Now - lastTime).TotalSeconds) < 5 && Math.Abs(lastTotal - rounded) < 0.005)
+                                {
+                                    // recent identical sample exists — skip insert
+                                }
+                                else
+                                {
+                                    db.InsertTotalPLHistory(DateTime.Now, rounded);
+                                }
+                            }
+                            else
+                            {
+                                db.InsertTotalPLHistory(DateTime.Now, rounded);
+                            }
+                        }
+                        catch { /* best-effort, fall back to direct insert */
+                            try { db.InsertTotalPLHistory(DateTime.Now, rounded); } catch { }
+                        }
+                    }
+                    catch { }
+                }
+                catch { }
+            }, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
     private async Task<string?> GetStringWithRetriesAsync(string url, CancellationToken token)
     {
         const int maxAttempts = 3;
@@ -86,6 +178,8 @@ internal class PollerBackgroundService : BackgroundService
                         {
                             var nowUtc = DateTime.UtcNow;
                             hbDb.SetHeartbeat(nowUtc);
+                            // also compute and persist Total P/L on every heartbeat (fire-and-forget)
+                            try { _ = ComputeAndInsertTotalPlAsync(stoppingToken); } catch { }
                             try { Console.WriteLine($"Poller heartbeat (local): {DateTime.Now.ToString("o")} "); } catch { }
                         }
                         catch (OperationCanceledException)
@@ -121,6 +215,116 @@ internal class PollerBackgroundService : BackgroundService
         catch (Exception ex)
         {
             try { _logger?.LogWarning(ex, "Failed to start heartbeat background task"); } catch { }
+        }
+
+        // Start a background task to compute Total P/L and persist it to TotalPLHistory every 10s.
+        try
+        {
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var settings = new TradeMVVM.Trading.Services.SettingsService();
+                    var converter = new TradeMVVM.Trading.DataAnalysis.CurrencyConverter();
+
+                    while (!stoppingToken.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            double totalPlEur = 0.0;
+                            try
+                            {
+                                var csv = settings.HoldingsCsvPath;
+                                if (!string.IsNullOrWhiteSpace(csv) && System.IO.File.Exists(csv))
+                                {
+                                    var holdings = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(csv);
+                                    if (holdings != null && holdings.Count > 0)
+                                    {
+                                        foreach (var kv in holdings)
+                                        {
+                                            try
+                                            {
+                                                var h = kv.Value;
+                                                double avgBuy = h.RemainingBoughtShares > 0 ? (h.RemainingBoughtAmount / h.RemainingBoughtShares) : double.NaN;
+                                                double lastPrice = double.NaN;
+                                                try
+                                                {
+                                                    var rows = _repo.LoadByIsin(h.ISIN);
+                                                    if (rows != null && rows.Count > 0)
+                                                        lastPrice = rows[rows.Count - 1].Price;
+                                                }
+                                                catch { }
+
+                                                double unrealizedNative = 0.0;
+                                                if (!double.IsNaN(avgBuy) && !double.IsNaN(lastPrice) && !double.IsInfinity(lastPrice))
+                                                {
+                                                    unrealizedNative = h.Shares * (lastPrice - avgBuy);
+                                                }
+
+                                                try { totalPlEur += converter.ConvertToEur(unrealizedNative, h.Currency ?? "EUR"); } catch { }
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                try { _logger?.LogDebug(ex, "Compute TotalPL failed"); } catch { }
+                            }
+
+                            try
+                            {
+                                var db = new TradeMVVM.Trading.Services.DatabaseService();
+                                // round to 2 decimal places to match GUI display precision
+                                var rounded = Math.Round(totalPlEur, 2);
+                                try
+                                {
+                                    var hist = db.LoadTotalPLHistory();
+                                    if (hist != null && hist.Count > 0)
+                                    {
+                                        var last = hist[hist.Count - 1];
+                                        var lastTime = last.Item1;
+                                        var lastTotal = last.Item2;
+                                        if (Math.Abs((DateTime.Now - lastTime).TotalSeconds) < 5 && Math.Abs(lastTotal - rounded) < 0.005)
+                                        {
+                                            // recent identical sample exists — skip insert
+                                        }
+                                        else
+                                        {
+                                            db.InsertTotalPLHistory(DateTime.Now, rounded);
+                                            try { Console.WriteLine($"Poller: Inserted TotalPL {rounded:0.00} at {DateTime.Now:O}"); } catch { }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        db.InsertTotalPLHistory(DateTime.Now, rounded);
+                                        try { Console.WriteLine($"Poller: Inserted TotalPL {rounded:0.00} at {DateTime.Now:O}"); } catch { }
+                                    }
+                                }
+                                catch { try { db.InsertTotalPLHistory(DateTime.Now, rounded); } catch { } }
+                            }
+                            catch (Exception ex)
+                            {
+                                try { _logger?.LogWarning(ex, "Failed to insert TotalPLHistory"); } catch { }
+                            }
+                        }
+                        catch (OperationCanceledException) { break; }
+                        catch { }
+
+                        try { await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    try { _logger?.LogWarning(ex, "TotalPL background task failed"); } catch { }
+                }
+            }, stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            try { _logger?.LogWarning(ex, "Failed to start TotalPL background task"); } catch { }
         }
 
         // Kick off self-test and full-scan in background so they do not block the main polling loop or heartbeat.

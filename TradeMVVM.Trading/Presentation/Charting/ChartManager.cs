@@ -37,6 +37,63 @@ namespace TradeMVVM.Trading.Chart
             ConfigureAxes();
         }
 
+        // Create a deterministic brush for a series key so colors remain consistent across renders
+        private static SolidColorBrush CreateBrushForKey(string key, int index)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(key))
+                    return new SolidColorBrush(System.Windows.Media.Colors.LightGray);
+
+                uint hash = (uint)key.GetHashCode();
+                double hue = hash % 360; // 0..359
+                double sat = 0.65 + ((hash >> 8) % 35) / 100.0; // 0.65..0.99
+                double light = 0.45 + ((hash >> 16) % 20) / 100.0; // 0.45..0.64
+
+                var c = HslToRgb(hue, sat, light);
+                return new SolidColorBrush(c);
+            }
+            catch
+            {
+                return new SolidColorBrush(System.Windows.Media.Colors.LightGray);
+            }
+        }
+
+        private static System.Windows.Media.Color HslToRgb(double h, double s, double l)
+        {
+            // h in [0,360], s and l in [0,1]
+            h = (h % 360) / 360.0;
+            double r = l, g = l, b = l;
+            if (s > 0)
+            {
+                double q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                double p = 2 * l - q;
+                double hk = h;
+                double[] t = new double[3];
+                t[0] = hk + 1.0 / 3.0;
+                t[1] = hk;
+                t[2] = hk - 1.0 / 3.0;
+                for (int i = 0; i < 3; i++)
+                {
+                    if (t[i] < 0) t[i] += 1;
+                    if (t[i] > 1) t[i] -= 1;
+                    if (t[i] < 1.0 / 6.0)
+                        t[i] = p + (q - p) * 6 * t[i];
+                    else if (t[i] < 1.0 / 2.0)
+                        t[i] = q;
+                    else if (t[i] < 2.0 / 3.0)
+                        t[i] = p + (q - p) * (2.0 / 3.0 - t[i]) * 6;
+                    else
+                        t[i] = p;
+                }
+                r = t[0]; g = t[1]; b = t[2];
+            }
+            byte R = (byte)Math.Round(Math.Min(1.0, Math.Max(0.0, r)) * 255.0);
+            byte G = (byte)Math.Round(Math.Min(1.0, Math.Max(0.0, g)) * 255.0);
+            byte B = (byte)Math.Round(Math.Min(1.0, Math.Max(0.0, b)) * 255.0);
+            return System.Windows.Media.Color.FromRgb(R, G, B);
+        }
+
         // remember last-rendered data so we can re-render with different visual settings when zoom changes
         private Dictionary<string, List<Tuple<DateTime, double>>> _lastData;
         private TimeSpan? _activeZoomSpan;
@@ -180,6 +237,9 @@ namespace TradeMVVM.Trading.Chart
             }
             catch { }
 
+            // preserve existing brushes so series retain their selected colors across re-renders
+            Dictionary<string, Brush> oldBrushes = null;
+            try { oldBrushes = new Dictionary<string, Brush>(LineBrushes); } catch { oldBrushes = new Dictionary<string, Brush>(); }
             try { SeriesByKey.Clear(); } catch { }
             try { LineBrushes.Clear(); } catch { }
             try { _seriesPoints.Clear(); } catch { }
@@ -211,10 +271,15 @@ namespace TradeMVVM.Trading.Chart
                 var plotXs = xs;
                 var plotYs = ys;
                 object scatter = null;
+                object signalPl = null;
                 try
                 {
                     int target = (int)Math.Max(2, Math.Floor(_plot.ActualWidth));
                     if (target < 50) target = Math.Min(50, xs.Length);
+                    // when ForceScatter is requested, avoid automatic downsampling so all DB samples
+                    // within the visible range are rendered (prevents aggressive decimation)
+                    if (ForceScatter)
+                        target = int.MaxValue / 4;
 
                     // detect roughly uniform spacing in X (equal time steps)
                     bool isUniform = false;
@@ -245,19 +310,26 @@ namespace TradeMVVM.Trading.Chart
                         double xOffset = xs.Length > 0 ? xs[0] : 0.0;
 
                         // decimate if too many points
+                        double[] signalXsForMarkers = xs;
                         if (xs.Length > target)
                         {
                             int step = (int)Math.Ceiling((double)xs.Length / target);
                             var decYs = new List<double>();
+                            var decXs = new List<double>();
                             for (int i = 0; i < ys.Length; i += step)
+                            {
                                 decYs.Add(ys[i]);
+                                decXs.Add(xs[i]);
+                            }
                             plotYs = decYs.ToArray();
+                            signalXsForMarkers = decXs.ToArray();
                             // adjust sample rate because we skipped samples
                             sampleRate = sampleRate / step;
                         }
 
                         // use Signal plot and configure sample rate / offset via reflection (API varies by ScottPlot version)
                         var pl = _plot.Plot.Add.Signal(plotYs);
+                        signalPl = pl;
                         try
                         {
                             var t = pl.GetType();
@@ -277,7 +349,131 @@ namespace TradeMVVM.Trading.Chart
                             }
                         }
                         catch { }
-                        scatter = pl;
+
+                        // Create an overlay scatter to render markers (Signal doesn't support markers)
+                        try
+                        {
+                            var overlayXs = signalXsForMarkers;
+                            var overlayYs = plotYs;
+                            var overlay = _plot.Plot.Add.Scatter(overlayXs, overlayYs);
+                            // ensure overlay shows markers only (no connecting line) by setting line width to 0
+                            try
+                            {
+                                var stOverlay = overlay.GetType();
+                                var lineNamesOverlay = new[] { "LineWidth", "lineWidth", "Width" };
+                                foreach (var n2 in lineNamesOverlay)
+                                {
+                                    try
+                                    {
+                                        var p2 = stOverlay.GetProperty(n2);
+                                        if (p2 != null && p2.CanWrite)
+                                        {
+                                            if (p2.PropertyType == typeof(double) || p2.PropertyType == typeof(float))
+                                                p2.SetValue(overlay, Convert.ChangeType(0.0, p2.PropertyType));
+                                            else if (p2.PropertyType == typeof(int))
+                                                p2.SetValue(overlay, Convert.ChangeType(0, p2.PropertyType));
+                                            break;
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                // set marker size and shape on overlay
+                                int overlayCount = overlayXs != null ? overlayXs.Length : 0;
+                                var markerNamesOv = new[] { "MarkerSize", "markerSize", "MarkerSizeF", "MarkerSizePx" };
+                                foreach (var mn in markerNamesOv)
+                                {
+                                    try
+                                    {
+                                        var mp = stOverlay.GetProperty(mn);
+                                        if (mp != null && mp.CanWrite)
+                                        {
+                                            if (overlayCount <= 1)
+                                            {
+                                                if (mp.PropertyType == typeof(double) || mp.PropertyType == typeof(float))
+                                                    mp.SetValue(overlay, Convert.ChangeType(8.0, mp.PropertyType));
+                                                else if (mp.PropertyType == typeof(int))
+                                                    mp.SetValue(overlay, Convert.ChangeType(8, mp.PropertyType));
+                                            }
+                                            else
+                                            {
+                                                if (mp.PropertyType == typeof(double) || mp.PropertyType == typeof(float))
+                                                    mp.SetValue(overlay, Convert.ChangeType(6.0, mp.PropertyType));
+                                                else if (mp.PropertyType == typeof(int))
+                                                    mp.SetValue(overlay, Convert.ChangeType(6, mp.PropertyType));
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                var mpropOv = stOverlay.GetProperty("MarkerShape") ?? stOverlay.GetProperty("Marker");
+                                if (mpropOv != null && mpropOv.CanWrite)
+                                {
+                                    try
+                                    {
+                                        var t = mpropOv.PropertyType;
+                                        if (t.IsEnum)
+                                        {
+                                            var names = Enum.GetNames(t);
+                                            var prefer = names.FirstOrDefault(nm => nm.IndexOf("Circle", StringComparison.OrdinalIgnoreCase) >= 0)
+                                                        ?? names.FirstOrDefault(nm => nm.IndexOf("Dot", StringComparison.OrdinalIgnoreCase) >= 0)
+                                                        ?? names.FirstOrDefault();
+                                            if (!string.IsNullOrEmpty(prefer))
+                                            {
+                                                var val = Enum.Parse(t, prefer);
+                                                mpropOv.SetValue(overlay, val);
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                            catch { }
+                            scatter = overlay;
+
+                            // ensure the signal plottable draws a visible line by setting its LineWidth
+                            try
+                            {
+                                var stSig = pl.GetType();
+                                var lineNamesSig = new[] { "LineWidth", "lineWidth", "Width" };
+                                foreach (var n3 in lineNamesSig)
+                                {
+                                    try
+                                    {
+                                        var p3 = stSig.GetProperty(n3);
+                                        if (p3 != null && p3.CanWrite)
+                                        {
+                                            if (p3.PropertyType == typeof(double) || p3.PropertyType == typeof(float))
+                                                p3.SetValue(pl, Convert.ChangeType(1.5, p3.PropertyType));
+                                            else if (p3.PropertyType == typeof(int))
+                                                p3.SetValue(pl, Convert.ChangeType(1, p3.PropertyType));
+                                            break;
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                            catch { }
+
+                            // also attempt to apply color to the Signal plottable so both line and markers match
+                            try
+                            {
+                                var stSignal = pl.GetType();
+                                var propColorSig = stSignal.GetProperty("Color");
+                                if (propColorSig != null && propColorSig.CanWrite)
+                                {
+                                    // actual color application happens later when brush is known; mark both plottables by storing temporary mapping
+                                }
+                            }
+                            catch { }
+                        }
+                        catch
+                        {
+                            // if overlay creation failed, fall back to using the Signal plottable for interaction
+                            scatter = pl;
+                        }
                     }
                     else
                     {
@@ -318,6 +514,91 @@ namespace TradeMVVM.Trading.Chart
                 }
                 catch { }
 
+                // try to enforce line drawing (connect points) and hide markers so curves appear as continuous lines
+                try
+                {
+                    if (scatter != null)
+                    {
+                        int plottedCount = 0;
+                        try { plottedCount = (plotXs != null ? plotXs.Length : (plotYs != null ? plotYs.Length : 0)); } catch { plottedCount = 0; }
+                        var st = scatter.GetType();
+
+                        // set LineWidth if available
+                        var lineNames = new[] { "LineWidth", "lineWidth", "Width" };
+                        foreach (var n in lineNames)
+                        {
+                            try
+                            {
+                                var p = st.GetProperty(n);
+                                if (p != null && p.CanWrite)
+                                {
+                                    if (p.PropertyType == typeof(double) || p.PropertyType == typeof(float))
+                                        p.SetValue(scatter, Convert.ChangeType(1.5, p.PropertyType));
+                                    else if (p.PropertyType == typeof(int))
+                                        p.SetValue(scatter, Convert.ChangeType(1, p.PropertyType));
+                                    break;
+                                }
+                            }
+                            catch { }
+                        }
+
+                        // set MarkerSize to visible values so both points and lines are shown
+                        var markerNames = new[] { "MarkerSize", "markerSize", "MarkerSizeF", "MarkerSizePx" };
+                        foreach (var n in markerNames)
+                        {
+                            try
+                            {
+                                var p = st.GetProperty(n);
+                                if (p != null && p.CanWrite)
+                                {
+                                    // show a larger marker when only a single point is plotted, otherwise small markers
+                                    if (plottedCount <= 1)
+                                    {
+                                        if (p.PropertyType == typeof(double) || p.PropertyType == typeof(float))
+                                            p.SetValue(scatter, Convert.ChangeType(8.0, p.PropertyType));
+                                        else if (p.PropertyType == typeof(int))
+                                            p.SetValue(scatter, Convert.ChangeType(8, p.PropertyType));
+                                    }
+                                    else
+                                    {
+                                        // make markers more visible for multi-point series
+                                        if (p.PropertyType == typeof(double) || p.PropertyType == typeof(float))
+                                            p.SetValue(scatter, Convert.ChangeType(6.0, p.PropertyType));
+                                        else if (p.PropertyType == typeof(int))
+                                            p.SetValue(scatter, Convert.ChangeType(6, p.PropertyType));
+                                    }
+                                    break;
+                                }
+                            }
+                            catch { }
+                        }
+
+                        // prefer a visible marker shape (e.g. Circle) when the plottable supports a marker enum
+                        try
+                        {
+                            var mprop = st.GetProperty("MarkerShape") ?? st.GetProperty("Marker");
+                            if (mprop != null && mprop.CanWrite)
+                            {
+                                var t = mprop.PropertyType;
+                                if (t.IsEnum)
+                                {
+                                    var names = Enum.GetNames(t);
+                                    var prefer = names.FirstOrDefault(nm => nm.IndexOf("Circle", StringComparison.OrdinalIgnoreCase) >= 0)
+                                                ?? names.FirstOrDefault(nm => nm.IndexOf("Dot", StringComparison.OrdinalIgnoreCase) >= 0)
+                                                ?? names.FirstOrDefault();
+                                    if (!string.IsNullOrEmpty(prefer))
+                                    {
+                                        var val = Enum.Parse(t, prefer);
+                                        mprop.SetValue(scatter, val);
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+
                 // store the plottable so callers (UI) can query nearest points on mouse events
                 try
                 {
@@ -325,24 +606,75 @@ namespace TradeMVVM.Trading.Chart
                 }
                 catch { }
 
-                // store color for legend use (use reflection because plottable type may vary)
+                // determine brush to use: reuse old brush when available, otherwise create deterministic color per-key
+                Brush brush = null;
                 try
                 {
-                    var brush = new SolidColorBrush(System.Windows.Media.Colors.LightGray);
-                    if (scatter != null)
+                    if (oldBrushes != null && oldBrushes.TryGetValue(kvp.Key, out var old) && old != null)
+                        brush = old;
+                    else
+                        brush = CreateBrushForKey(kvp.Key, LineBrushes.Count);
+
+
+
+                    LineBrushes[kvp.Key] = brush ?? new SolidColorBrush(System.Windows.Media.Colors.LightGray);
+
+                    // Apply brush color to the scatter/signal plottable if possible
+                    try
                     {
-                        var st2 = scatter.GetType();
-                        var propColor = st2.GetProperty("Color");
-                        if (propColor != null)
+                        if (brush is SolidColorBrush scb)
                         {
-                            var val = propColor.GetValue(scatter);
-                            if (val is System.Drawing.Color sd)
-                                brush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(sd.R, sd.G, sd.B));
-                            else if (val is System.Windows.Media.Color wm)
-                                brush = new SolidColorBrush(wm);
+                            var wm = scb.Color;
+                            // apply to overlay/primary scatter if present
+                            if (scatter != null)
+                            {
+                                try
+                                {
+                                    var st = scatter.GetType();
+                                    var propColor = st.GetProperty("Color");
+                                    if (propColor != null && propColor.CanWrite)
+                                    {
+                                        var pt = propColor.PropertyType;
+                                        if (pt == typeof(System.Drawing.Color))
+                                        {
+                                            var dc = System.Drawing.Color.FromArgb(wm.A, wm.R, wm.G, wm.B);
+                                            propColor.SetValue(scatter, dc);
+                                        }
+                                        else if (pt == typeof(System.Windows.Media.Color))
+                                        {
+                                            propColor.SetValue(scatter, wm);
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            // also apply to underlying signal plottable if created
+                            if (signalPl != null)
+                            {
+                                try
+                                {
+                                    var stSig = signalPl.GetType();
+                                    var propColorSig = stSig.GetProperty("Color");
+                                    if (propColorSig != null && propColorSig.CanWrite)
+                                    {
+                                        var pt2 = propColorSig.PropertyType;
+                                        if (pt2 == typeof(System.Drawing.Color))
+                                        {
+                                            var dc2 = System.Drawing.Color.FromArgb(wm.A, wm.R, wm.G, wm.B);
+                                            propColorSig.SetValue(signalPl, dc2);
+                                        }
+                                        else if (pt2 == typeof(System.Windows.Media.Color))
+                                        {
+                                            propColorSig.SetValue(signalPl, wm);
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
                         }
                     }
-                    LineBrushes[kvp.Key] = brush;
+                    catch { }
                 }
                 catch
                 {

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Linq;
 using System.Data.SQLite;
 using System.Threading;
 using System.Threading.Tasks;
@@ -49,11 +50,49 @@ namespace TradeMVVM.Trading.Services
                         using (var busyCmd = new SQLiteCommand("PRAGMA busy_timeout = 5000;", conn))
                             busyCmd.ExecuteNonQuery();
 
-                        var cmd = new SQLiteCommand("INSERT INTO TotalPLHistory (Time, TotalPL) VALUES (@time, @total);", conn);
-                        cmd.Parameters.AddWithValue("@time", time);
-                        cmd.Parameters.AddWithValue("@total", totalPl);
-                        cmd.ExecuteNonQuery();
-                        return;
+                        using (var tran = conn.BeginTransaction())
+                        {
+                            try
+                            {
+                                // check latest sample inside the transaction to avoid race conditions
+                                DateTime? lastTime = null;
+                                double? lastTotal = null;
+                                using (var sel = new SQLiteCommand("SELECT Time, TotalPL FROM TotalPLHistory ORDER BY Time DESC LIMIT 1;", conn, tran))
+                                using (var reader = sel.ExecuteReader())
+                                {
+                                    if (reader.Read())
+                                    {
+                                        lastTime = ReadNullableDateTime(reader, 0);
+                                        lastTotal = reader.IsDBNull(1) ? (double?)null : reader.GetDouble(1);
+                                    }
+                                }
+
+                                bool skip = false;
+                                if (lastTime.HasValue && lastTotal.HasValue)
+                                {
+                                    if (Math.Abs((time - lastTime.Value).TotalSeconds) < 5 && Math.Abs(lastTotal.Value - totalPl) < 0.005)
+                                    {
+                                        skip = true;
+                                    }
+                                }
+
+                                if (!skip)
+                                {
+                                    var cmd = new SQLiteCommand("INSERT INTO TotalPLHistory (Time, TotalPL) VALUES (@time, @total);", conn, tran);
+                                    cmd.Parameters.AddWithValue("@time", time);
+                                    cmd.Parameters.AddWithValue("@total", totalPl);
+                                    cmd.ExecuteNonQuery();
+                                }
+
+                                tran.Commit();
+                                return;
+                            }
+                            catch
+                            {
+                                try { tran.Rollback(); } catch { }
+                                throw;
+                            }
+                        }
                     }
                 }
                 catch (SQLiteException ex) when (IsBusyOrLocked(ex) && attempt < DbLockedRetryCount)
@@ -1006,24 +1045,89 @@ namespace TradeMVVM.Trading.Services
         {
             try
             {
+                // delete only trailing equal rows (by Price and Percent) for this ISIN, then insert new row
+                const double EPS = 1e-2;
                 using (var conn = new SQLiteConnection(_connection))
                 {
                     conn.Open();
+                    using (var tran = conn.BeginTransaction())
+                    {
+                        try
+                        {
+                            var block = new List<long>();
+                            using (var sel = new SQLiteCommand("SELECT rowid, Price, Percent FROM Prices WHERE ISIN = @isin ORDER BY Time DESC;", conn, tran))
+                            {
+                                sel.Parameters.AddWithValue("@isin", point.ISIN ?? string.Empty);
+                                using var reader = sel.ExecuteReader();
+                                while (reader.Read())
+                                {
+                                    var rowid = reader.IsDBNull(0) ? 0L : reader.GetInt64(0);
+                                    double price = reader.IsDBNull(1) ? double.NaN : reader.GetDouble(1);
+                                    double percent = reader.IsDBNull(2) ? double.NaN : reader.GetDouble(2);
+                                    bool priceEq = !double.IsNaN(price) && !double.IsNaN(point.Price) ? Math.Abs(price - point.Price) <= EPS : (double.IsNaN(price) && double.IsNaN(point.Price));
+                                    bool percentEq = !double.IsNaN(percent) && !double.IsNaN(point.Percent) ? Math.Abs(percent - point.Percent) <= EPS : (double.IsNaN(percent) && double.IsNaN(point.Percent));
+                                    if (priceEq && percentEq && rowid > 0)
+                                    {
+                                        block.Add(rowid);
+                                    }
+                                    else
+                                    {
+                                        break; // stop at first non-equal row
+                                    }
+                                }
+                            }
 
-                    var cmd = new SQLiteCommand(
-                        "INSERT INTO Prices (ISIN, Time, Price, Percent, Provider, ProviderTime, Forecast, PredictedPrice) VALUES (@isin, @time, @price, @percent, @provider, @providertime, @forecast, @predicted)",
-                        conn);
+                            if (block.Count > 0)
+                            {
+                                // update latest row to new values and delete remaining in the block
+                                var latest = block[0];
+                                using var upd = new SQLiteCommand(@"UPDATE Prices SET Time = @time, Price = @price, Percent = @percent, Provider = @provider, ProviderTime = @providertime, Forecast = @forecast, PredictedPrice = @predicted WHERE rowid = @rowid;", conn, tran);
+                                upd.Parameters.AddWithValue("@time", point.Time);
+                                upd.Parameters.AddWithValue("@price", point.Price);
+                                upd.Parameters.AddWithValue("@percent", point.Percent);
+                                upd.Parameters.AddWithValue("@provider", point.Provider ?? string.Empty);
+                                upd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
+                                upd.Parameters.AddWithValue("@forecast", point.Forecast ?? string.Empty);
+                                upd.Parameters.AddWithValue("@predicted", point.PredictedPrice);
+                                upd.Parameters.AddWithValue("@rowid", latest);
+                                upd.ExecuteNonQuery();
 
-                    cmd.Parameters.AddWithValue("@isin", point.ISIN);
-                    cmd.Parameters.AddWithValue("@time", point.Time);
-                    cmd.Parameters.AddWithValue("@price", point.Price);
-                    cmd.Parameters.AddWithValue("@percent", point.Percent);
-                    cmd.Parameters.AddWithValue("@provider", point.Provider ?? string.Empty);
-                    cmd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("@forecast", point.Forecast ?? string.Empty);
-                    cmd.Parameters.AddWithValue("@predicted", point.PredictedPrice);
+                                if (block.Count > 1)
+                                {
+                                    var others = block.Skip(1).ToList();
+                                    var inParam = string.Join(",", others.Select((_, i) => $"@p{i}"));
+                                    using var del = new SQLiteCommand($"DELETE FROM Prices WHERE rowid IN ({inParam});", conn, tran);
+                                    for (int i = 0; i < others.Count; i++)
+                                        del.Parameters.AddWithValue($"@p{i}", others[i]);
+                                    del.ExecuteNonQuery();
+                                }
+                            }
+                            else
+                            {
+                                using var cmd = new SQLiteCommand(
+                                    "INSERT INTO Prices (ISIN, Time, Price, Percent, Provider, ProviderTime, Forecast, PredictedPrice) VALUES (@isin, @time, @price, @percent, @provider, @providertime, @forecast, @predicted)",
+                                    conn, tran);
 
-                    cmd.ExecuteNonQuery();
+                                cmd.Parameters.AddWithValue("@isin", point.ISIN);
+                                cmd.Parameters.AddWithValue("@time", point.Time);
+                                cmd.Parameters.AddWithValue("@price", point.Price);
+                                cmd.Parameters.AddWithValue("@percent", point.Percent);
+                                cmd.Parameters.AddWithValue("@provider", point.Provider ?? string.Empty);
+                                cmd.Parameters.AddWithValue("@providertime", (object)point.ProviderTime ?? DBNull.Value);
+                                cmd.Parameters.AddWithValue("@forecast", point.Forecast ?? string.Empty);
+                                cmd.Parameters.AddWithValue("@predicted", point.PredictedPrice);
+
+                                cmd.ExecuteNonQuery();
+                            }
+
+                            tran.Commit();
+                        }
+                        catch
+                        {
+                            try { tran.Rollback(); } catch { }
+                            throw;
+                        }
+                    }
                 }
 
                 Debug.WriteLine($"DB: Inserted {point.ISIN} @ {point.Time:O} price={point.Price} percent={point.Percent} provider={point.Provider}");
