@@ -12,8 +12,8 @@
             <!-- Server start/stop removed from GUI; toolbar shows server status only -->
 
             <StackPanel Orientation="Vertical" Margin="8,0,0,0" VerticalAlignment="Center">
-                <TextBlock x:Name="TxtPollingEnabled" Foreground="White" FontSize="11" Text="Polling: ?" />
-                <TextBlock x:Name="TxtLastHeartbeat" Foreground="LightGray" FontSize="11" Text="Heartbeat: -" />
+                <TextBlock x:Name="TxtPollingEnabled" Foreground="White" FontSize="11" Text="Polling: ?" Visibility="Collapsed" />
+                <TextBlock x:Name="TxtLastHeartbeat" Foreground="LightGray" FontSize="11" Text="Heartbeat: -" Visibility="Collapsed" />
             </StackPanel>
 
             <Button Content="Kill Chrome"
