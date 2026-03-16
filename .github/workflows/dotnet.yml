@@ -20,17 +20,20 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
+        shell: pwsh
         run: |
-          set -e
-          # If a solution file exists, restore it. If there is a non-standard .slnx use that.
-          if ls *.sln 1>/dev/null 2>&1; then
-            dotnet restore *.sln
-          elif ls *.slnx 1>/dev/null 2>&1; then
-            dotnet restore *.slnx
-          else
-            # No solution file found: restore each project individually to avoid MSB1011
-            find . -name '*.csproj' -print0 | xargs -0 -n1 dotnet restore
-          fi
+          # Use PowerShell on Windows runners. Restore solution if present, otherwise restore each project.
+          $sln = Get-ChildItem -Path . -Filter '*.sln' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($sln) {
+            dotnet restore $sln
+          } else {
+            $slnx = Get-ChildItem -Path . -Filter '*.slnx' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($slnx) {
+              dotnet restore $slnx
+            } else {
+              Get-ChildItem -Recurse -Filter '*.csproj' | ForEach-Object { dotnet restore $_.FullName }
+            }
+          }
 
       - name: Build
         run: dotnet build --configuration Release --no-restore
