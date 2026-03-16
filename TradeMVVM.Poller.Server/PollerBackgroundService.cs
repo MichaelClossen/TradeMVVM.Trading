@@ -28,6 +28,43 @@ internal class PollerBackgroundService : BackgroundService
         _http = http ?? new HttpClient();
     }
 
+// Helper: sanitize holdings dictionary produced by HoldingsCalculator to skip malformed/empty entries
+static class PollerHelpers
+{
+    public static Dictionary<string, TradeMVVM.Trading.DataAnalysis.Holding> SanitizeHoldings(Dictionary<string, TradeMVVM.Trading.DataAnalysis.Holding> raw, string sourcePath)
+    {
+        var outDict = new Dictionary<string, TradeMVVM.Trading.DataAnalysis.Holding>(StringComparer.OrdinalIgnoreCase);
+        if (raw == null) return outDict;
+
+        foreach (var kv in raw)
+        {
+            try
+            {
+                var h = kv.Value;
+                if (h == null) continue;
+                var isin = (h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant();
+                if (string.IsNullOrWhiteSpace(isin))
+                {
+                    try { Trace.TraceInformation($"Poller: skipping holding with empty ISIN from {sourcePath}"); } catch { }
+                    continue;
+                }
+
+                // skip holdings with zero net shares (historical-only or empty)
+                if (h.Shares == 0)
+                {
+                    try { Trace.TraceInformation($"Poller: skipping zero-share holding for ISIN {isin} from {sourcePath}"); } catch { }
+                    continue;
+                }
+
+                outDict[isin] = h;
+            }
+            catch { }
+        }
+
+        return outDict;
+    }
+}
+
     // compute Total P/L from holdings CSV and insert into TotalPLHistory (used by heartbeat)
     private async Task ComputeAndInsertTotalPlAsync(CancellationToken token)
     {
@@ -42,43 +79,44 @@ internal class PollerBackgroundService : BackgroundService
                     var converter = new TradeMVVM.Trading.DataAnalysis.CurrencyConverter();
                     double totalPlEur = 0.0;
 
-                    try
-                    {
-                        var csv = settings.HoldingsCsvPath;
-                        if (!string.IsNullOrWhiteSpace(csv) && System.IO.File.Exists(csv))
+                        try
                         {
-                            var holdings = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(csv);
-                            if (holdings != null && holdings.Count > 0)
+                            var csv = settings.HoldingsCsvPath;
+                                if (!string.IsNullOrWhiteSpace(csv) && System.IO.File.Exists(csv))
                             {
-                                foreach (var kv in holdings)
+                                var holdingsRaw = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(csv);
+                                var holdings = PollerHelpers.SanitizeHoldings(holdingsRaw, csv);
+                                if (holdings != null && holdings.Count > 0)
                                 {
-                                    try
+                                    foreach (var kv in holdings)
                                     {
-                                        var h = kv.Value;
-                                        double avgBuy = h.RemainingBoughtShares > 0 ? (h.RemainingBoughtAmount / h.RemainingBoughtShares) : double.NaN;
-                                        double lastPrice = double.NaN;
                                         try
                                         {
-                                            var rows = _repo.LoadByIsin(h.ISIN);
-                                            if (rows != null && rows.Count > 0)
-                                                lastPrice = rows[rows.Count - 1].Price;
+                                            var h = kv.Value;
+                                            double avgBuy = h.RemainingBoughtShares > 0 ? (h.RemainingBoughtAmount / h.RemainingBoughtShares) : double.NaN;
+                                            double lastPrice = double.NaN;
+                                            try
+                                            {
+                                                var rows = _repo.LoadByIsin(h.ISIN);
+                                                if (rows != null && rows.Count > 0)
+                                                    lastPrice = rows[rows.Count - 1].Price;
+                                            }
+                                            catch { }
+
+                                            double unrealizedNative = 0.0;
+                                            if (!double.IsNaN(avgBuy) && !double.IsNaN(lastPrice) && !double.IsInfinity(lastPrice))
+                                            {
+                                                unrealizedNative = h.Shares * (lastPrice - avgBuy);
+                                            }
+
+                                            try { totalPlEur += converter.ConvertToEur(unrealizedNative, h.Currency ?? "EUR"); } catch { }
                                         }
                                         catch { }
-
-                                        double unrealizedNative = 0.0;
-                                        if (!double.IsNaN(avgBuy) && !double.IsNaN(lastPrice) && !double.IsInfinity(lastPrice))
-                                        {
-                                            unrealizedNative = h.Shares * (lastPrice - avgBuy);
-                                        }
-
-                                        try { totalPlEur += converter.ConvertToEur(unrealizedNative, h.Currency ?? "EUR"); } catch { }
                                     }
-                                    catch { }
                                 }
                             }
                         }
-                    }
-                    catch { }
+                        catch { }
 
                     try
                     {
@@ -238,10 +276,11 @@ internal class PollerBackgroundService : BackgroundService
                                 if (!string.IsNullOrWhiteSpace(csv) && System.IO.File.Exists(csv))
                                 {
                                     var holdings = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(csv);
-                                    if (holdings != null && holdings.Count > 0)
+                                if (holdings != null && holdings.Count > 0)
+                                {
+                                    var sanitized = PollerHelpers.SanitizeHoldings(holdings, csv);
+                                    foreach (var kv in sanitized)
                                     {
-                                        foreach (var kv in holdings)
-                                        {
                                             try
                                             {
                                                 var h = kv.Value;
@@ -400,6 +439,52 @@ internal class PollerBackgroundService : BackgroundService
             stocks.Add(("DE000BASF111", "BASF", StockType.Aktie));
             stocks.Add(("DE0007664039", "Siemens", StockType.Aktie));
         }
+
+        // Start a background task that periodically refreshes the stocks list from the DB
+        // and updates the shared `stocks` list under lock so the polling service can pick up changes.
+        try
+        {
+            Task.Run(async () =>
+            {
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var dbService = new TradeMVVM.Trading.Services.DatabaseService();
+                        var allLive = dbService.LoadAll();
+                        var newStocks = new List<(string isin, string name, StockType type)>();
+                        if (allLive != null && allLive.Count > 0)
+                        {
+                            var distinctLive = allLive.Select(p => p.ISIN).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                            foreach (var isin in distinctLive)
+                            {
+                                holdingsMap.TryGetValue(isin, out var nm);
+                                newStocks.Add((isin, nm ?? string.Empty, StockType.Aktie));
+                            }
+                        }
+
+                        if (newStocks.Count > 0)
+                        {
+                            lock (stocks)
+                            {
+                                stocks.Clear();
+                                foreach (var s in newStocks)
+                                    stocks.Add(s);
+                            }
+                            try { _logger?.LogInformation("Stocks list refreshed from DB: {count} items", newStocks.Count); } catch { }
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (Exception ex)
+                    {
+                        try { _logger?.LogDebug(ex, "Failed to refresh stocks list"); } catch { }
+                    }
+
+                    try { await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken).ConfigureAwait(false); } catch { break; }
+                }
+            }, stoppingToken);
+        }
+        catch { }
 
         // attempt a best-effort backfill for existing rows where Price != 0 but Percent is missing/zero
         try

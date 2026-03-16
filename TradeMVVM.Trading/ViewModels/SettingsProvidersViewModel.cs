@@ -42,6 +42,12 @@ namespace TradeMVVM.Trading.ViewModels
             Providers.Clear();
             foreach (var h in holdings.OrderBy(x => x.ISIN))
             {
+                try
+                {
+                    if (h == null || h.Shares <= 0) continue; // only include currently held ISINs
+                }
+                catch { continue; }
+
                 var entry = new ProviderEntry
                 {
                     ISIN = h.ISIN,
@@ -70,6 +76,35 @@ namespace TradeMVVM.Trading.ViewModels
 
                 Providers.Add(entry);
             }
+        }
+
+        // Load provider entries from DB holding totals (only ISINs that have persisted totals)
+        public void LoadFromDb(TradeMVVM.Trading.Services.DatabaseService db = null)
+        {
+            Providers.Clear();
+            try
+            {
+                var svc = db ?? new TradeMVVM.Trading.Services.DatabaseService();
+                var recs = svc.LoadHoldingTotalRecords();
+                foreach (var kv in recs.OrderBy(k => k.Key))
+                {
+                    try
+                    {
+                        // kv.Value is now (updated, totalEur, shares)
+                        var shares = kv.Value.shares;
+                        if (double.IsNaN(shares) || shares <= 0) continue;
+                        var entry = new ProviderEntry
+                        {
+                            ISIN = kv.Key,
+                            Name = string.Empty,
+                            PrimaryProvider = _provider.GetPrimaryProviderForName(string.Empty) ?? "Gettex"
+                        };
+                        Providers.Add(entry);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         public void SetAllToDefault()

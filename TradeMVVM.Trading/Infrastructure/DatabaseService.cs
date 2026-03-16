@@ -459,6 +459,7 @@ namespace TradeMVVM.Trading.Services
                         UnrealizedPL REAL,
                         TotalPL REAL,
                         TotalPLEUR REAL,
+                        Shares REAL,
                         Updated DATETIME
                     );", conn);
                             totalsCmd.ExecuteNonQuery();
@@ -510,6 +511,10 @@ namespace TradeMVVM.Trading.Services
                                 if (!existingCols.Contains("PredictedPrice"))
                                 {
                                     try { var alter4 = new SQLiteCommand("ALTER TABLE Prices ADD COLUMN PredictedPrice REAL;", conn); alter4.ExecuteNonQuery(); } catch { }
+                                }
+                                if (!existingCols.Contains("Shares"))
+                                {
+                                    try { var alter5 = new SQLiteCommand("ALTER TABLE HoldingTotals ADD COLUMN Shares REAL;", conn); alter5.ExecuteNonQuery(); } catch { }
                                 }
                             }
                             catch { }
@@ -569,15 +574,16 @@ namespace TradeMVVM.Trading.Services
         }
 
         // Return latest stored HoldingTotals records for all ISINs.
-        public Dictionary<string, (DateTime updated, double totalEur)> LoadHoldingTotalRecords()
+        // Value: (updated, totalEur, shares)
+        public Dictionary<string, (DateTime updated, double totalEur, double shares)> LoadHoldingTotalRecords()
         {
-            var dict = new Dictionary<string, (DateTime updated, double totalEur)>(StringComparer.OrdinalIgnoreCase);
+            var dict = new Dictionary<string, (DateTime updated, double totalEur, double shares)>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 using (var conn = new SQLiteConnection(_connection))
                 {
                     conn.Open();
-                    var cmd = new SQLiteCommand("SELECT ISIN, TotalPLEUR, Updated FROM HoldingTotals;", conn);
+                    var cmd = new SQLiteCommand("SELECT ISIN, TotalPLEUR, Shares, Updated FROM HoldingTotals;", conn);
                     using (var reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
@@ -590,8 +596,9 @@ namespace TradeMVVM.Trading.Services
                                 continue;
 
                             var totalEur = reader.GetDouble(1);
-                            var updated = ReadNullableDateTime(reader, 2) ?? DateTime.MinValue;
-                            dict[isin] = (updated, totalEur);
+                            var shares = reader.FieldCount > 2 && !reader.IsDBNull(2) ? reader.GetDouble(2) : double.NaN;
+                            var updated = ReadNullableDateTime(reader, 3) ?? DateTime.MinValue;
+                            dict[isin] = (updated, totalEur, shares);
                         }
                     }
                 }
@@ -686,7 +693,7 @@ namespace TradeMVVM.Trading.Services
         }
 
         // Persist per-holding totals (insert or update)
-        public void UpsertHoldingTotal(string isin, string currency, double realized, double unrealized, double total, double totalEur)
+        public void UpsertHoldingTotal(string isin, string currency, double realized, double unrealized, double total, double totalEur, double shares = double.NaN)
         {
             for (int attempt = 1; attempt <= DbLockedRetryCount; attempt++)
             {
@@ -702,8 +709,8 @@ namespace TradeMVVM.Trading.Services
                         }
 
                         var cmd = new SQLiteCommand(@"
-                        INSERT OR REPLACE INTO HoldingTotals (ISIN, Currency, RealizedPL, UnrealizedPL, TotalPL, TotalPLEUR, Updated)
-                        VALUES (@isin, @cur, @realized, @unreal, @total, @totalEur, @updated);", conn);
+                        INSERT OR REPLACE INTO HoldingTotals (ISIN, Currency, RealizedPL, UnrealizedPL, TotalPL, TotalPLEUR, Shares, Updated)
+                        VALUES (@isin, @cur, @realized, @unreal, @total, @totalEur, @shares, @updated);", conn);
                         cmd.CommandTimeout = 5;
                         cmd.Parameters.AddWithValue("@isin", isin ?? string.Empty);
                         cmd.Parameters.AddWithValue("@cur", currency ?? string.Empty);
@@ -711,6 +718,7 @@ namespace TradeMVVM.Trading.Services
                         cmd.Parameters.AddWithValue("@unreal", unrealized);
                         cmd.Parameters.AddWithValue("@total", total);
                         cmd.Parameters.AddWithValue("@totalEur", totalEur);
+                        cmd.Parameters.AddWithValue("@shares", double.IsNaN(shares) ? (object)DBNull.Value : shares);
                         cmd.Parameters.AddWithValue("@updated", DateTime.Now);
                         cmd.ExecuteNonQuery();
                         return;

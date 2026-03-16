@@ -9,6 +9,7 @@ using System.Windows.Input;
 using TradeMVVM.Trading.DataAnalysis;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using TradeMVVM.Trading.Data;
 using TradeMVVM.Domain;
@@ -109,7 +110,7 @@ namespace TradeMVVM.Trading.ViewModels
                     {
                         _highlightTimer = new System.Windows.Threading.DispatcherTimer
                         {
-                            Interval = TimeSpan.FromSeconds(5)
+                            Interval = TimeSpan.FromSeconds(1)
                         };
                         _highlightTimer.Tick += (s, e) =>
                         {
@@ -138,7 +139,7 @@ namespace TradeMVVM.Trading.ViewModels
                     {
                         _pollHighlightTimer = new System.Windows.Threading.DispatcherTimer
                         {
-                            Interval = TimeSpan.FromSeconds(5)
+                            Interval = TimeSpan.FromSeconds(1)
                         };
                         _pollHighlightTimer.Tick += (s, e) =>
                         {
@@ -765,235 +766,205 @@ namespace TradeMVVM.Trading.ViewModels
         }
 
         // Update only the rows for the provided ISINs using latest DB values.
-        // Called from UI thread (every second) — loads only the affected ISINs to stay fast.
+        // Runs DB work on a background thread and applies UI updates via Dispatcher to avoid blocking the UI.
         public void UpdatePrices(List<string> isins)
         {
             if (isins == null || isins.Count == 0)
             {
+                // fallback: trigger full refresh (async)
                 Refresh();
                 return;
             }
 
-            var repo = new TradeMVVM.Trading.Data.PriceRepository();
-            var latestPoints = new Dictionary<string, TradeMVVM.Domain.StockPoint>(StringComparer.OrdinalIgnoreCase);
-            try
+            var isinsSet = new HashSet<string>(isins.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Replace("\u00A0", string.Empty).Trim().ToUpperInvariant()), StringComparer.OrdinalIgnoreCase);
+
+            Task.Run(() =>
             {
-                foreach (var isin in isins)
+                var repo = new TradeMVVM.Trading.Data.PriceRepository();
+                var latestPoints = new Dictionary<string, TradeMVVM.Domain.StockPoint>(StringComparer.OrdinalIgnoreCase);
+                try
                 {
-                    try
-                    {
-                        var points = repo.LoadByIsin(isin);
-                        if (points == null || points.Count == 0)
-                            continue;
-
-                        var latest = points.OrderByDescending(p => p.Time).First();
-                        PatchWithLastValidEntry(latest, points);
-                        latestPoints[isin] = latest;
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-
-            var converter = new CurrencyConverter();
-
-            foreach (var isin in isins)
-            {
-                var h = _source.FirstOrDefault(x => string.Equals(x.ISIN, isin, StringComparison.OrdinalIgnoreCase));
-                if (h == null)
-                    continue;
-
-                // compute same values as in Refresh for this holding
-                var avgBuy = h.RemainingBoughtShares > 0 ? h.RemainingBoughtAmount / h.RemainingBoughtShares : double.NaN;
-
-                double plPercent = double.NaN;
-                if (latestPoints.TryGetValue(h.ISIN, out var spProv))
-                    plPercent = spProv.Percent;
-
-                var trailingVals = GetTrailingStopValues(h.ISIN);
-                var trailingConfigured = trailingVals.configured;
-                var trailingCurrent = UpdateTrailingStopCurrent(h.ISIN, plPercent, trailingConfigured);
-
-                double plAmount = double.NaN;
-                double currentPrice = double.NaN;
-                if (latestPoints.TryGetValue(h.ISIN, out var spCur))
-                    currentPrice = spCur.Price;
-
-                if (!double.IsNaN(currentPrice))
-                {
-                    var currentMarketValueNative = h.Shares * currentPrice;
-                    if (!double.IsNaN(h.RemainingBoughtAmount) && h.RemainingBoughtAmount != 0)
-                        plAmount = currentMarketValueNative - h.RemainingBoughtAmount;
-                    else if (!double.IsNaN(avgBuy))
-                        plAmount = h.Shares * (currentPrice - avgBuy);
-                }
-
-                double plAmountEur = double.NaN;
-                if (!double.IsNaN(plAmount))
-                {
-                    try { plAmountEur = converter.ConvertToEur(plAmount, h.Currency); } catch { plAmountEur = double.NaN; }
-                }
-
-                // determine provider time if available
-                DateTime? providerTime = null;
-                if (latestPoints.TryGetValue(h.ISIN, out var spProvEntry))
-                    providerTime = spProvEntry.ProviderTime;
-
-                // compute realized/unrealized/total for this holding
-                double realized = double.IsNaN(h.RealizedPL) || h.RealizedPL == 0.0 ? double.NaN : h.RealizedPL;
-                double unrealized = double.NaN;
-                if (!double.IsNaN(avgBuy) && !double.IsNaN(currentPrice))
-                    unrealized = h.Shares * (currentPrice - avgBuy);
-
-                double total = (double.IsNaN(realized) ? 0.0 : realized) + (double.IsNaN(unrealized) ? 0.0 : unrealized);
-
-                // create updated row
-                var newRow = new HoldingsRow
-                {
-                    ISIN = h.ISIN,
-                    Forecast = ComputeForecast(h.ISIN),
-                    Name = h.Name,
-                    LastTradeTime = h.LastPriceTime,
-                    Currency = h.Currency,
-                    Shares = h.Shares,
-                    LastPrice = h.LastPrice,
-                    // Marktwert Kauf = Anteile * durchschnittlicher Kaufpreis (falls vorhanden)
-                    MarketValueEur = Math.Round(converter.ConvertToEur(!double.IsNaN(avgBuy) ? h.Shares * avgBuy : h.MarketValue, h.Currency), 2),
-                    CurrentPrice = !double.IsNaN(currentPrice) ? currentPrice : double.NaN,
-                    MarketValue = !double.IsNaN(currentPrice) ? Math.Round(h.Shares * currentPrice, 2) : double.NaN,
-                    TotalBoughtShares = h.TotalBoughtShares,
-                    AvgBuyPrice = avgBuy,
-                    TotalSoldShares = h.TotalSoldShares,
-                    AvgSellPrice = double.IsNaN(h.TotalSoldShares) ? double.NaN : (h.TotalSoldAmount / h.TotalSoldShares),
-                    TotalTaxes = h.TotalTaxes,
-                    RealizedPL = realized,
-                    UnrealizedPL = unrealized,
-                    TotalPL = Math.Round(total, 2),
-                    PLPercent = double.IsNaN(plPercent) ? double.NaN : Math.Round(plPercent, 2),
-                    PLAmount = double.IsNaN(plAmountEur) ? double.NaN : Math.Round(plAmountEur, 2),
-                    AlertThresholdPercent = GetIsinAlertThreshold(h.ISIN),
-                    TrailingStopPercent = Math.Round(trailingCurrent, 2),
-                    TrailingStopConfiguredPercent = Math.Round(trailingConfigured, 2),
-                    IsTotal = false,
-                    ProviderTime = providerTime,
-                    IsRecentlyUpdated = true
-                };
-
-                AttachThresholdHandler(newRow);
-
-                // replace existing row if present
-                var idx = -1;
-                for (int i = 0; i < Holdings.Count; i++)
-                {
-                    if (string.Equals(Holdings[i].ISIN, isin, StringComparison.OrdinalIgnoreCase))
-                    {
-                        idx = i;
-                        break;
-                    }
-                }
-
-                if (idx >= 0)
-                {
-                    Holdings[idx] = newRow;
-                }
-                else
-                {
-                    // not found, add at end
-                    Holdings.Add(newRow);
-                }
-            }
-
-            SaveTrailingStopState(force: false);
-
-            // recompute totals (lightweight)
-            try
-            {
-                double sumTaxes = 0, sumMarket = 0;
-                foreach (var r in Holdings)
-                {
-                    sumTaxes += r.TotalTaxes;
-                    sumMarket += double.IsNaN(r.MarketValueEur) ? 0 : r.MarketValueEur;
-                }
-                TotalTaxes = Math.Round(Holdings.Sum(x => new CurrencyConverter().ConvertToEur(x.TotalTaxes, x.Currency)), 2);
-                // keep other totals as-is (they depend on transaction data)
-            }
-            catch { }
-            // recompute realized/unrealized/total totals in EUR and notify listeners
-            try
-            {
-                double totalRealizedEur = 0;
-                double totalUnrealizedEur = 0;
-                var conv = new CurrencyConverter();
-                foreach (var r in Holdings)
-                {
-                    try
-                    {
-                        totalRealizedEur += conv.ConvertToEur(double.IsNaN(r.RealizedPL) ? 0.0 : r.RealizedPL, r.Currency);
-                        totalUnrealizedEur += conv.ConvertToEur(double.IsNaN(r.UnrealizedPL) ? 0.0 : r.UnrealizedPL, r.Currency);
-                    }
-                    catch { }
-                }
-
-                TotalRealizedPL = Math.Round(totalRealizedEur, 2);
-                TotalUnrealizedPL = Math.Round(totalUnrealizedEur, 2);
-                TotalPL = Math.Round(TotalRealizedPL + TotalUnrealizedPL, 2);
-
-                double gains = 0.0, losses = 0.0;
-                foreach (var r in Holdings)
-                {
-                    try
-                    {
-                        var plEur = conv.ConvertToEur(double.IsNaN(r.TotalPL) ? 0.0 : r.TotalPL, r.Currency);
-                        if (plEur > 0) gains += plEur; else if (plEur < 0) losses += plEur;
-                    }
-                    catch { }
-                }
-                TotalGains = Math.Round(gains, 2);
-                TotalLosses = Math.Round(losses, 2);
-
-                    // persist per-holding totals and overall aggregate
-                    try
-                    {
-                        var db2 = new TradeMVVM.Trading.Services.DatabaseService();
-                        var conv2 = new CurrencyConverter();
-                    // collect top movers for logging
-                    var topList = new List<Tuple<string, double>>();
-                    foreach (var r in Holdings)
+                    foreach (var isin in isinsSet)
                     {
                         try
                         {
-                            var realized = double.IsNaN(r.RealizedPL) ? 0.0 : r.RealizedPL;
-                            var unreal = double.IsNaN(r.UnrealizedPL) ? 0.0 : r.UnrealizedPL;
-                            var totalpl = double.IsNaN(r.TotalPL) ? realized + unreal : r.TotalPL;
-                            var totalEur = conv2.ConvertToEur(totalpl, r.Currency);
-                            db2.UpsertHoldingTotal(r.ISIN, r.Currency, realized, unreal, totalpl, totalEur);
-                            topList.Add(Tuple.Create(r.ISIN, totalEur));
+                            var points = repo.LoadByIsin(isin);
+                            if (points == null || points.Count == 0)
+                                continue;
+
+                            var latest = points.OrderByDescending(p => p.Time).First();
+                            PatchWithLastValidEntry(latest, points);
+                            latestPoints[isin] = latest;
                         }
                         catch { }
                     }
-
-                    // persist overall total in EUR under key "TotalPL"
-                    db2.UpsertAggregate("TotalPL", TotalPL);
-
-                    try
-                    {
-                        if (IsHoldingsSnapshotLoggingEnabled())
-                        {
-                            var timestamp = DateTime.UtcNow.ToString("O");
-                            Trace.TraceInformation($"HoldingsSnapshot {timestamp} TotalRealizedEUR={TotalRealizedPL:0.00} TotalUnrealizedEUR={TotalUnrealizedPL:0.00} TotalPL={TotalPL:0.00}");
-                            var top = topList.OrderByDescending(t => Math.Abs(t.Item2)).Take(8).ToList();
-                            foreach (var t in top)
-                                Trace.TraceInformation($"  MOV {t.Item1} {t.Item2:0.00} EUR");
-                        }
-                    }
-                    catch { }
                 }
                 catch { }
 
-                // notify listeners that prices/holdings totals updated
-                HoldingsUpdated?.Invoke(_source);
-            }
-            catch { }
+                var conv = new CurrencyConverter();
+                var updates = new List<(string isin, HoldingsRow row)>();
+
+                // compute updated rows off the UI thread
+                foreach (var h in _source)
+                {
+                    try
+                    {
+                        if (h == null) continue;
+                        if (!isinsSet.Contains((h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant()))
+                            continue;
+
+                        var avgBuy = h.RemainingBoughtShares > 0 ? h.RemainingBoughtAmount / h.RemainingBoughtShares : double.NaN;
+                        double plPercent = double.NaN;
+                        if (latestPoints.TryGetValue(h.ISIN, out var spProv))
+                            plPercent = spProv.Percent;
+
+                        var trailingVals = GetTrailingStopValues(h.ISIN);
+                        var trailingConfigured = trailingVals.configured;
+                        var trailingCurrent = UpdateTrailingStopCurrent(h.ISIN, plPercent, trailingConfigured);
+
+                        double plAmount = double.NaN;
+                        double currentPrice = double.NaN;
+                        if (latestPoints.TryGetValue(h.ISIN, out var spCur))
+                            currentPrice = spCur.Price;
+
+                        if (!double.IsNaN(currentPrice))
+                        {
+                            var currentMarketValueNative = h.Shares * currentPrice;
+                            if (!double.IsNaN(h.RemainingBoughtAmount) && h.RemainingBoughtAmount != 0)
+                                plAmount = currentMarketValueNative - h.RemainingBoughtAmount;
+                            else if (!double.IsNaN(avgBuy))
+                                plAmount = h.Shares * (currentPrice - avgBuy);
+                        }
+
+                        double plAmountEur = double.NaN;
+                        if (!double.IsNaN(plAmount))
+                        {
+                            try { plAmountEur = conv.ConvertToEur(plAmount, h.Currency); } catch { plAmountEur = double.NaN; }
+                        }
+
+                        DateTime? providerTime = null;
+                        if (latestPoints.TryGetValue(h.ISIN, out var spProvEntry))
+                            providerTime = spProvEntry.ProviderTime;
+
+                        double realized = double.IsNaN(h.RealizedPL) || h.RealizedPL == 0.0 ? double.NaN : h.RealizedPL;
+                        double unrealized = double.NaN;
+                        if (!double.IsNaN(avgBuy) && !double.IsNaN(currentPrice))
+                            unrealized = h.Shares * (currentPrice - avgBuy);
+
+                        double total = (double.IsNaN(realized) ? 0.0 : realized) + (double.IsNaN(unrealized) ? 0.0 : unrealized);
+
+                        var newRow = new HoldingsRow
+                        {
+                            ISIN = h.ISIN,
+                            Forecast = ComputeForecast(h.ISIN),
+                            Name = h.Name,
+                            LastTradeTime = h.LastPriceTime,
+                            Currency = h.Currency,
+                            Shares = h.Shares,
+                            LastPrice = h.LastPrice,
+                            MarketValueEur = Math.Round(conv.ConvertToEur(!double.IsNaN(avgBuy) ? h.Shares * avgBuy : h.MarketValue, h.Currency), 2),
+                            CurrentPrice = !double.IsNaN(currentPrice) ? currentPrice : double.NaN,
+                            MarketValue = !double.IsNaN(currentPrice) ? Math.Round(h.Shares * currentPrice, 2) : double.NaN,
+                            TotalBoughtShares = h.TotalBoughtShares,
+                            AvgBuyPrice = avgBuy,
+                            TotalSoldShares = h.TotalSoldShares,
+                            AvgSellPrice = double.IsNaN(h.TotalSoldShares) ? double.NaN : (h.TotalSoldAmount / h.TotalSoldShares),
+                            TotalTaxes = h.TotalTaxes,
+                            RealizedPL = realized,
+                            UnrealizedPL = unrealized,
+                            TotalPL = Math.Round(total, 2),
+                            PLPercent = double.IsNaN(plPercent) ? double.NaN : Math.Round(plPercent, 2),
+                            PLAmount = double.IsNaN(plAmountEur) ? double.NaN : Math.Round(plAmountEur, 2),
+                            AlertThresholdPercent = GetIsinAlertThreshold(h.ISIN),
+                            TrailingStopPercent = Math.Round(trailingCurrent, 2),
+                            TrailingStopConfiguredPercent = Math.Round(trailingConfigured, 2),
+                            IsTotal = false,
+                            ProviderTime = providerTime,
+                            // IsRecentlyUpdated will be decided when applying updates on the UI thread
+                            IsRecentlyUpdated = false
+                        };
+
+                        updates.Add((h.ISIN, newRow));
+                    }
+                    catch { }
+                }
+
+                // apply updates on UI thread
+                try
+                {
+                    Application.Current?.Dispatcher?.BeginInvoke((Action)(() =>
+                    {
+                        try
+                        {
+                            foreach (var tup in updates)
+                            {
+                                try
+                                {
+                                    AttachThresholdHandler(tup.row);
+                                    var idx = -1;
+                                    for (int i = 0; i < Holdings.Count; i++)
+                                    {
+                                        if (string.Equals(Holdings[i].ISIN, tup.isin, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            idx = i; break;
+                                        }
+                                    }
+                                    bool markUpdated = false;
+                                    // mark every applied update as recently updated so user sees all changes
+                                    try
+                                    {
+                                        tup.row.IsRecentlyUpdated = true;
+                                    }
+                                    catch { }
+
+                                    if (idx >= 0)
+                                    {
+                                        Holdings[idx] = tup.row;
+                                    }
+                                    else
+                                    {
+                                        Holdings.Add(tup.row);
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            SaveTrailingStopState(force: false);
+
+                            // lightweight totals update
+                            try
+                            {
+                                TotalTaxes = Math.Round(Holdings.Sum(x => new CurrencyConverter().ConvertToEur(x.TotalTaxes, x.Currency)), 2);
+                            }
+                            catch { }
+
+                            // recompute realized/unrealized totals in EUR
+                            try
+                            {
+                                double totalRealizedEur = 0, totalUnrealizedEur = 0;
+                                var conv2 = new CurrencyConverter();
+                                foreach (var r in Holdings)
+                                {
+                                    try
+                                    {
+                                        totalRealizedEur += conv2.ConvertToEur(double.IsNaN(r.RealizedPL) ? 0.0 : r.RealizedPL, r.Currency);
+                                        totalUnrealizedEur += conv2.ConvertToEur(double.IsNaN(r.UnrealizedPL) ? 0.0 : r.UnrealizedPL, r.Currency);
+                                    }
+                                    catch { }
+                                }
+                                TotalRealizedPL = Math.Round(totalRealizedEur, 2);
+                                TotalUnrealizedPL = Math.Round(totalUnrealizedEur, 2);
+                                TotalPL = Math.Round(TotalRealizedPL + TotalUnrealizedPL, 2);
+                            }
+                            catch { }
+
+                            HoldingsUpdated?.Invoke(_source);
+                        }
+                        catch { }
+                    }));
+                }
+                catch { }
+            });
         }
 
         private void Refresh()
@@ -1275,7 +1246,11 @@ namespace TradeMVVM.Trading.ViewModels
                     return;
                 _csvPath = path;
                 var dict = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(_csvPath);
-                _source = dict.Values.ToList();
+                // explicit sanitization: only keep holdings with positive shares
+                _source = (dict ?? new Dictionary<string, TradeMVVM.Trading.DataAnalysis.Holding>())
+                    .Values
+                    .Where(h => h != null && h.Shares > 0 && !string.IsNullOrWhiteSpace((h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim()))
+                    .ToList();
                 Refresh();
             }
             catch

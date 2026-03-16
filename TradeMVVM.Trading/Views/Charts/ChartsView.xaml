@@ -44,27 +44,35 @@
                                Margin="12,0,0,0" />
                 </Grid>
 
+                <!-- Status box placed directly under the header (gestapelt) -->
+                <Border x:Name="AlertStatusBox" DockPanel.Dock="Top" Background="#2E2E2E" CornerRadius="6" Padding="6" Margin="0,0,0,8">
+                    <StackPanel Orientation="Vertical">
+                        <!-- Now / Heartbeat line (moved here) -->
+                        <TextBlock Text="{Binding AlertStatusNowHeartbeat, FallbackValue='Now: -  • Heartbeat: -'}" Foreground="LightGray" FontSize="12" TextWrapping="Wrap" />
+                        <!-- Server running line (moved here) -->
+                        <TextBlock Text="{Binding AlertStatusServer, FallbackValue='Server: -'}" Foreground="LightGreen" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <!-- processes/chrome/chromedriver and stocks info removed -->
+                    </StackPanel>
+                </Border>
+
                 <StackPanel DockPanel.Dock="Top" Orientation="Vertical" Margin="0,0,0,8">
-                    <TextBlock x:Name="TxtAlertToast" Foreground="Orange" Margin="0,0,0,8" TextWrapping="Wrap" />
-                    <StackPanel>
-                        <!-- PL values above the buttons, stacked vertically (left-aligned) -->
-                        <StackPanel Orientation="Vertical" HorizontalAlignment="Left" Margin="0,0,0,6">
-                            <TextBlock x:Name="TxtServerHeartbeat" Text="{Binding AlertServerHeartbeat}" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
-                            <TextBlock x:Name="TxtServerRunning" Text="{Binding AlertServerRunning}" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
-                            <TextBlock x:Name="TxtTotalPLTop" Text="0.00 €" Foreground="White" FontWeight="Bold" HorizontalAlignment="Left" />
-                            <TextBlock x:Name="TxtTotalPLTopDeltaStart" Text="" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
+                    <!-- PL box: show total and deltas inside a bordered panel -->
+                    <Border Background="#2E2E2E" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                        <StackPanel Orientation="Vertical" HorizontalAlignment="Left">
+                            <TextBlock x:Name="TxtTotalPLTop" Text="0.00 €" Foreground="White" FontWeight="Bold" HorizontalAlignment="Left" FontSize="16" />
+                            <TextBlock x:Name="TxtTotalPLTopDeltaStart" Text="" Foreground="LightGreen" FontSize="12" HorizontalAlignment="Left" Margin="0,6,0,0" />
                             <TextBlock x:Name="TxtTotalPLTopDeltaPrev" Text="" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
                         </StackPanel>
-
-                        <!-- Buttons moved below the points list -->
-                    </StackPanel>
-                    <TextBlock Text="Holdings CSV:" Foreground="LightGray" Margin="0,6,0,2" FontWeight="Bold" />
-                    <TextBlock x:Name="TxtHoldingsCsvPath" Text="(nicht konfiguriert)" Foreground="LightGray" TextWrapping="Wrap" MaxWidth="260" />
+                    </Border>
+                   
+                    <!-- Holdings CSV shown in a box matching the width of the status box above -->
+                    <Border Background="#2E2E2E" CornerRadius="6" Padding="8" Margin="0,0,0,8" HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Vertical" HorizontalAlignment="Stretch">
+                            <TextBlock Text="Holdings CSV:" Foreground="LightGray" FontWeight="Bold" Margin="0,0,0,4" TextAlignment="Left" />
+                            <TextBlock x:Name="TxtHoldingsCsvPath" Text="(nicht konfiguriert)" Foreground="LightGray" TextWrapping="Wrap" TextAlignment="Left" />
+                        </StackPanel>
+                    </Border>
                     <StackPanel Orientation="Vertical" Margin="0,6,0,0">
-                        <TextBlock Text="{Binding AlertStatusProcesses}" Foreground="LightGray" FontSize="12" />
-                        <TextBlock Text="{Binding AlertStatusStocks}" Foreground="LightGray" FontSize="12" />
-                        <TextBlock Text="{Binding AlertStatusHistory}" Foreground="LightGray" FontSize="12" />
-                        <TextBlock Text="{Binding AlertMessage}" Foreground="Orange" FontSize="12" />
                         <WrapPanel Margin="0,6,0,0">
                             <Button x:Name="BtnAlertTest" Content="Test" Margin="0,0,6,0" Click="BtnAlertTest_Click" />
                             <Button x:Name="BtnAlertJump" Content="Zum Chart" Margin="0,0,6,0" Click="BtnAlertJump_Click" />
@@ -74,12 +82,21 @@
                     </StackPanel>
                 </StackPanel>
 
-                <ListBox x:Name="LstAlerts"
-                         Background="#1C1C1C"
-                         Foreground="LightGray"
-                         BorderBrush="#333333"
-                         DisplayMemberPath="Display"
-                         MouseDoubleClick="LstAlerts_MouseDoubleClick" />
+                <!-- Alerts list shown in its own box under the buttons -->
+                <Border Background="#2E2E2E" CornerRadius="6" Padding="6" Margin="0,8,0,0">
+                    <ListBox x:Name="LstAlerts"
+                             Background="#1C1C1C"
+                             Foreground="LightGray"
+                             BorderBrush="#333333"
+                             MouseDoubleClick="LstAlerts_MouseDoubleClick"
+                            >
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Display}" Foreground="Orange" TextWrapping="Wrap"  />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
             </DockPanel>
         </Border>
 

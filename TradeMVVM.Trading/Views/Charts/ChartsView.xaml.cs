@@ -30,13 +30,35 @@ namespace TradeMVVM.Trading.Views.Charts
             private string _stocks = string.Empty; public string AlertStatusStocks { get => _stocks; set { _stocks = value; Raise(nameof(AlertStatusStocks)); } }
             private string _history = string.Empty; public string AlertStatusHistory { get => _history; set { _history = value; Raise(nameof(AlertStatusHistory)); } }
             private string _time = string.Empty; public string AlertStatusTime { get => _time; set { _time = value; Raise(nameof(AlertStatusTime)); } }
+            private string _nowhb = string.Empty; public string AlertStatusNowHeartbeat { get => _nowhb; set { _nowhb = value; Raise(nameof(AlertStatusNowHeartbeat)); } }
+            private string _server = string.Empty; public string AlertStatusServer { get => _server; set { _server = value; Raise(nameof(AlertStatusServer)); } }
             private string _msg = string.Empty; public string AlertMessage { get => _msg; set { _msg = value; Raise(nameof(AlertMessage)); } }
-            private string _serverHeartbeat = string.Empty; public string AlertServerHeartbeat { get => _serverHeartbeat; set { _serverHeartbeat = value; Raise(nameof(AlertServerHeartbeat)); } }
-            private string _serverRunning = string.Empty; public string AlertServerRunning { get => _serverRunning; set { _serverRunning = value; Raise(nameof(AlertServerRunning)); } }
         }
 
         private readonly AlertCenterVm _alertVm = new AlertCenterVm();
-        private class AlertItem
+        // Safe accessor for optional XAML TextBlock named "TxtAlertToast".
+        // Returns the element from the loaded XAML if present; otherwise returns a hidden dummy TextBlock
+        // so existing code can safely set Text/Visibility without null checks.
+        private System.Windows.Controls.TextBlock _txtAlertToastFallback;
+        private System.Windows.Controls.TextBlock TxtAlertToast
+        {
+            get
+            {
+                try
+                {
+                    var tb = this.FindName("TxtAlertToast") as System.Windows.Controls.TextBlock;
+                    if (tb != null) return tb;
+                }
+                catch { }
+
+                if (_txtAlertToastFallback == null)
+                {
+                    _txtAlertToastFallback = new System.Windows.Controls.TextBlock { Visibility = System.Windows.Visibility.Collapsed, Text = string.Empty };
+                }
+                return _txtAlertToastFallback;
+            }
+        }
+        public class AlertItem
         {
             public DateTime Timestamp { get; set; }
             public string Message { get; set; }
@@ -684,7 +706,9 @@ namespace TradeMVVM.Trading.Views.Charts
                 }
                 catch { }
 
-                AddAlert("manual:test", $"Test-Alert ausgelöst{(string.IsNullOrWhiteSpace(isin) ? string.Empty : $" ({isin})")}", isin);
+                // use a unique key so test alerts are not suppressed by the cooldown
+                var key = $"manual:test:{DateTime.Now.Ticks}";
+                AddAlert(key, $"Test-Alert ausgelöst{(string.IsNullOrWhiteSpace(isin) ? string.Empty : $" ({isin})")}", isin);
             }
             catch { }
         }
@@ -701,7 +725,19 @@ namespace TradeMVVM.Trading.Views.Charts
 
         private void LstAlerts_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            try { JumpToSelectedAlert(); } catch { }
+            try
+            {
+                var selected = LstAlerts?.SelectedItem as AlertItem;
+                if (selected != null && !string.IsNullOrWhiteSpace(selected.Isin))
+                {
+                    TryOpenProviderForIsin(selected.Isin);
+                }
+                else
+                {
+                    JumpToSelectedAlert();
+                }
+            }
+            catch { }
         }
 
         private void JumpToSelectedAlert()
@@ -713,10 +749,57 @@ namespace TradeMVVM.Trading.Views.Charts
                     return;
 
                 if (TryJumpToSeries(selected.Isin))
-                    TxtAlertToast.Text = $"[{DateTime.Now:HH:mm:ss}] Zum Chart gesprungen: {selected.Isin}";
+                    AddAlert($"ui:jump:{DateTime.Now.Ticks}", $"Zum Chart gesprungen: {selected.Isin}", selected.Isin);
             }
             catch { }
         }
+
+        private void TryOpenProviderForIsin(string isin)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(isin)) return;
+
+                // determine displayName if available (prefer holdings / stocks list)
+                string displayName = string.Empty;
+                try
+                {
+                    var globalVm = TradeMVVM.Trading.App.MainViewModelInstance ?? Application.Current?.MainWindow?.DataContext as TradeMVVM.Trading.Presentation.ViewModels.MainViewModel;
+                    if (globalVm != null)
+                    {
+                        var found = globalVm.Stocks.Find(s => string.Equals(s.isin_wkn, isin, StringComparison.OrdinalIgnoreCase));
+                        if (!string.IsNullOrWhiteSpace(found.name))
+                            displayName = found.name;
+
+                        if (string.IsNullOrWhiteSpace(displayName))
+                        {
+                            var op = globalVm.OwnedPositions.FirstOrDefault(p => string.Equals(p.isin, isin, StringComparison.OrdinalIgnoreCase));
+                            if (op != default && !string.IsNullOrWhiteSpace(op.name))
+                                displayName = op.name;
+                        }
+                    }
+                }
+                catch { }
+
+                string prov = null;
+                try
+                {
+                    var provider = App.Services?.GetService(typeof(TradeMVVM.Trading.Services.ChartDataProvider)) as TradeMVVM.Trading.Services.ChartDataProvider;
+                    if (provider != null)
+                        prov = provider.GetPrimaryProviderForName(displayName);
+                }
+                catch { }
+
+                string url;
+                if (!string.IsNullOrWhiteSpace(prov) && prov.Equals("BNP", StringComparison.OrdinalIgnoreCase))
+                    url = $"https://derivate.bnpparibas.com/product-details/{isin}/";
+                else
+                    url = $"https://www.gettex.de/aktie/{isin}/";
+
+                try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); } catch (Exception ex) { try { Trace.TraceWarning($"Failed to open provider URL for {isin}: {ex.Message}"); } catch { } }
+            }
+            catch { }
+            }
 
         private bool TryJumpToSeries(string isin)
         {
@@ -838,8 +921,6 @@ namespace TradeMVVM.Trading.Views.Charts
         private string _lastStatusProcessesText = string.Empty;
         private string _lastStatusStocksText = string.Empty;
         private string _lastStatusHistoryText = string.Empty;
-        private string _lastServerHeartbeatText = string.Empty;
-        private string _lastServerRunningText = string.Empty;
         // flag to ensure top-plot DB history is loaded once after axes/layout are initialized
         private bool _topPlotHistoryLoaded = false;
 
@@ -870,36 +951,33 @@ namespace TradeMVVM.Trading.Views.Charts
             try
             {
                 LstAlerts.ItemsSource = _alertItems;
+                // ensure ItemsSource remains attached after layout/DataContext changes
+                this.Loaded += (s, e) => { try { LstAlerts.ItemsSource = _alertItems; } catch { } };
                 _alertToastTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
                 _alertToastTimer.Tick += (s, e) =>
                 {
                     try
                     {
                         TxtAlertToast.Text = string.Empty;
+                        try { TxtAlertToast.Visibility = System.Windows.Visibility.Collapsed; } catch { }
                         _alertToastTimer.Stop();
                     }
                     catch { }
                 };
 
+                // ensure Alert-Center binding context is the internal VM (attach only to the status Border)
+                try {
+                    var statusBorder = this.FindName("AlertStatusBox") as Border;
+                    if (statusBorder != null) statusBorder.DataContext = _alertVm;
+                } catch { }
+
+                // start periodic status updates so the Alert-Center box is populated
+                try { StartStatusTimer(); UpdateStatus(); } catch { }
+
                 // sync top-right PL label with the header PL text initially and on changes
                 try
                 {
                     TxtTotalPLTop.Text = TxtTotalPL.Text; // This line is unchanged
-                    // initialize server heartbeat/running display from service immediately
-                    try
-                    {
-                        var svc = new TradeMVVM.Trading.Services.ServerControlService();
-                        var hb = svc.GetLastHeartbeat();
-                        string hbText = hb.HasValue ? hb.Value.ToString("dd.MM.yyyy HH:mm:ss") : "No heartbeat";
-                        string runningText = svc.IsPollingEnabled() ? "Server running" : "Server stopped";
-                        _alertVm.AlertServerHeartbeat = hbText;
-                        _alertVm.AlertServerRunning = runningText;
-                        _lastServerHeartbeatText = hbText;
-                        _lastServerRunningText = runningText;
-                        try { TxtServerHeartbeat.Text = hbText; } catch { }
-                        try { TxtServerRunning.Text = runningText; } catch { }
-                    }
-                    catch { }
                 }
                 catch { }
 
@@ -1900,31 +1978,91 @@ namespace TradeMVVM.Trading.Views.Charts
                 TxtStatusTime.Text = timeText;
                 try { if (_alertVm != null) _alertVm.AlertStatusTime = timeText; } catch { }
 
-                // Server heartbeat and running status
+                // compute Now/Heartbeat and Server status similar to Toolbar logic
                 try
                 {
-                    var svc = new TradeMVVM.Trading.Services.ServerControlService();
-                    var hb = svc.GetLastHeartbeat();
-                    string hbText = hb.HasValue ? hb.Value.ToString("dd.MM.yyyy HH:mm:ss") : "No heartbeat";
-                    string runningText = svc.IsPollingEnabled() ? "Server running" : "Server stopped";
-                    // only update VM when values changed to avoid unnecessary property change notifications
+                    string nowHb = null;
+                    string rawHb = null;
+                    DateTime? hb = null;
                     try
                     {
-                        if (_alertVm != null)
+                        var svc = new TradeMVVM.Trading.Services.ServerControlService();
+                        try { hb = svc.GetLastHeartbeat(); } catch { hb = null; }
+                        try
                         {
-                            if (!string.Equals(_lastServerHeartbeatText, hbText, StringComparison.Ordinal))
+                            using var conn = new System.Data.SQLite.SQLiteConnection(svc.ConnectionString);
+                            conn.Open();
+                            using var cmd = new System.Data.SQLite.SQLiteCommand("SELECT LastHeartbeat FROM PollingControl WHERE Id = 1", conn);
+                            var v = cmd.ExecuteScalar();
+                            if (v != null && v != DBNull.Value)
+                                rawHb = v.ToString();
+                        }
+                        catch { }
+                    }
+                    catch { }
+
+                    var now = DateTime.Now;
+                    var nowStr = now.ToString("yyyy-MM-dd HH:mm:ss");
+                    if (!string.IsNullOrEmpty(rawHb))
+                        nowHb = $"Now: {nowStr}  •  Heartbeat: {rawHb}";
+                    else if (hb.HasValue)
+                    {
+                        var hbStr = hb.Value.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff");
+                        nowHb = $"Now: {nowStr}  •  Heartbeat: {hbStr}";
+                    }
+                    else
+                        nowHb = $"Now: {nowStr}  •  Heartbeat: -";
+
+                    bool isRunning = false;
+                    try
+                    {
+                        if (hb.HasValue)
+                        {
+                            DateTime hbLocal = hb.Value.Kind == DateTimeKind.Utc ? hb.Value.ToLocalTime() : hb.Value;
+                            var age = DateTime.Now - hbLocal;
+                            if (age <= TimeSpan.FromSeconds(15)) isRunning = true;
+                        }
+                    }
+                    catch { }
+                    try
+                    {
+                        if (!isRunning)
+                        {
+                            foreach (var p in System.Diagnostics.Process.GetProcesses())
                             {
-                                _alertVm.AlertServerHeartbeat = hbText;
-                                _lastServerHeartbeatText = hbText;
-                            }
-                            if (!string.Equals(_lastServerRunningText, runningText, StringComparison.Ordinal))
-                            {
-                                _alertVm.AlertServerRunning = runningText;
-                                _lastServerRunningText = runningText;
+                                try
+                                {
+                                    if (!string.IsNullOrWhiteSpace(p.ProcessName) && p.ProcessName.IndexOf("poller", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        isRunning = true; break;
+                                    }
+                                    try
+                                    {
+                                        using (var mos = new System.Management.ManagementObjectSearcher($"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {p.Id}"))
+                                        {
+                                            foreach (System.Management.ManagementObject mo in mos.Get())
+                                            {
+                                                var cmd = mo["CommandLine"]?.ToString() ?? string.Empty;
+                                                if (cmd.IndexOf("poller", StringComparison.OrdinalIgnoreCase) >= 0 || cmd.IndexOf("TradeMVVM.Poller.Server", StringComparison.OrdinalIgnoreCase) >= 0)
+                                                {
+                                                    isRunning = true; break;
+                                                }
+                                            }
+                                        }
+                                        if (isRunning) break;
+                                    }
+                                    catch { }
+                                }
+                                catch { }
                             }
                         }
                     }
                     catch { }
+
+                    var serverText = $"Server: {(isRunning ? "RUNNING" : "STOPPED")}";
+
+                    try { if (_alertVm != null) _alertVm.AlertStatusNowHeartbeat = nowHb ?? string.Empty; } catch { }
+                    try { if (_alertVm != null) _alertVm.AlertStatusServer = serverText; } catch { }
                 }
                 catch { }
 
@@ -2193,20 +2331,30 @@ namespace TradeMVVM.Trading.Views.Charts
 
                 _lastAlertAt[key] = now;
 
-                Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
                 {
+                    var item = new AlertItem { Timestamp = now, Message = message, Isin = isin };
+                    _alertItems.Insert(0, item);
+                    while (_alertItems.Count > MaxAlertItems)
+                        _alertItems.RemoveAt(_alertItems.Count - 1);
+
                     try
                     {
-                        var item = new AlertItem { Timestamp = now, Message = message, Isin = isin };
-                        _alertItems.Insert(0, item);
-                        while (_alertItems.Count > MaxAlertItems)
-                            _alertItems.RemoveAt(_alertItems.Count - 1);
+                        // show toast and ensure list is scrolled to newest
+                        TxtAlertToast.Text = message;
+                        TxtAlertToast.Visibility = System.Windows.Visibility.Visible;
+                        _alertToastTimer?.Stop();
+                        _alertToastTimer?.Start();
 
-                        TxtAlertToast.Text = item.Display;
-                        try { _alertToastTimer.Stop(); _alertToastTimer.Start(); } catch { }
+                        LstAlerts.SelectedItem = item;
+                        LstAlerts.ScrollIntoView(item);
                     }
                     catch { }
-                });
+                }
+                catch { }
+            }));
             }
             catch { }
         }

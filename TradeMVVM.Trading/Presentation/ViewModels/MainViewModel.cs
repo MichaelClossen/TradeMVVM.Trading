@@ -328,7 +328,16 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
                 {
                     var providersVm = new TradeMVVM.Trading.ViewModels.SettingsProvidersViewModel(_chartDataProvider);
                     var holdings = _holdingsReport != null ? _holdingsReport.GetSourceHoldings() : new System.Collections.Generic.List<TradeMVVM.Trading.DataAnalysis.Holding>();
-                    providersVm.Load(holdings);
+                    if (holdings == null || holdings.Count == 0)
+                    {
+                        // fallback: load ISINs from DB holding totals so preferences show only ISINs with data
+                        try { providersVm.LoadFromDb(); }
+                        catch { providersVm.Load(holdings); }
+                    }
+                    else
+                    {
+                        providersVm.Load(holdings);
+                    }
                     vm.ProvidersVM = providersVm;
                 }
                 catch { }
@@ -530,13 +539,88 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
             {
                 if ((_stocks == null || _stocks.Count == 0) && PriceHistory != null && PriceHistory.Count > 0)
                 {
+                    // If a holdings report is available, prefer ISINs from the holdings with positive shares.
+                    // This avoids polling ISINs that exist only in historical DB rows but are not currently held
+                    // (e.g. zero shares / NaN average buy entries like DE000PK5QAE5).
+                    HashSet<string>? validHoldingsIsins = null;
+                    try
+                    {
+                        var src = HoldingsReport?.GetSourceHoldings();
+                        if (src != null && src.Count > 0)
+                        {
+                            validHoldingsIsins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var h in src)
+                            {
+                                try
+                                {
+                                    if (h.Shares <= 0) continue;
+                                    var normalized = (h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant();
+                                    if (!string.IsNullOrWhiteSpace(normalized)) validHoldingsIsins.Add(normalized);
+                                }
+                                catch { }
+                            }
+                            if (validHoldingsIsins.Count == 0)
+                                validHoldingsIsins = null; // treat as no holdings with positive shares
+                        }
+                    }
+                    catch { validHoldingsIsins = null; }
+
+                    // If holdings viewmodel is not yet populated, try a quick synchronous read
+                    // of a configured holdings CSV so we avoid populating Stocks from historical DB rows.
+                    try
+                    {
+                        if (validHoldingsIsins == null)
+                        {
+                            var cfgPath = _settingsService?.HoldingsCsvPath;
+                            if (!string.IsNullOrWhiteSpace(cfgPath) && File.Exists(cfgPath))
+                            {
+                                try
+                                {
+                                    var dict = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(cfgPath);
+                                    if (dict != null && dict.Count > 0)
+                                    {
+                                        validHoldingsIsins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                                        foreach (var kv in dict)
+                                        {
+                                            try
+                                            {
+                                                var h = kv.Value;
+                                                if (h == null) continue;
+                                                if (h.Shares <= 0) continue;
+                                                var norm = (h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant();
+                                                if (!string.IsNullOrWhiteSpace(norm)) validHoldingsIsins.Add(norm);
+                                            }
+                                            catch { }
+                                        }
+                                        if (validHoldingsIsins.Count == 0)
+                                            validHoldingsIsins = null;
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+
                     lock (_stocks)
                     {
                         foreach (var k in PriceHistory.Keys)
                         {
-                            if (_stocks.Any(s => string.Equals(s.isin_wkn, k, StringComparison.OrdinalIgnoreCase)))
-                                continue;
-                            _stocks.Add((k, string.Empty, TradeMVVM.Domain.StockType.Aktie));
+                            try
+                            {
+                                if (_stocks.Any(s => string.Equals(s.isin_wkn, k, StringComparison.OrdinalIgnoreCase)))
+                                    continue;
+
+                                if (validHoldingsIsins != null)
+                                {
+                                    var norm = (k ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant();
+                                    if (!validHoldingsIsins.Contains(norm))
+                                        continue; // skip historical-only ISINs when holdings exist
+                                }
+
+                                _stocks.Add((k, string.Empty, TradeMVVM.Domain.StockType.Aktie));
+                            }
+                            catch { }
                         }
                     }
                 }

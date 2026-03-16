@@ -11,17 +11,10 @@
 
             <!-- Server start/stop removed from GUI; toolbar shows server status only -->
 
-            <StackPanel Orientation="Vertical" Margin="8,0,0,0" VerticalAlignment="Center">
-                <TextBlock x:Name="TxtPollingEnabled" Foreground="White" FontSize="11" Text="Polling: ?" Visibility="Collapsed" />
-                <TextBlock x:Name="TxtLastHeartbeat" Foreground="LightGray" FontSize="11" Text="Heartbeat: -" Visibility="Collapsed" />
+            <StackPanel Orientation="Vertical" Margin="8,0,0,0" VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock x:Name="TxtPollingEnabled" Foreground="White" FontSize="11" Text="Polling: ?" />
+                <TextBlock x:Name="TxtLastHeartbeat" Foreground="LightGray" FontSize="11" Text="Heartbeat: -" />
             </StackPanel>
-
-            <Button Content="Kill Chrome"
-                    Width="90"
-                    Margin="2"
-                    Click="KillChromeButton_Click"/>
-
-            <Separator Width="20"/>
 
             <Grid Margin="4,0,0,0" VerticalAlignment="Center">
                 <Grid.RowDefinitions>

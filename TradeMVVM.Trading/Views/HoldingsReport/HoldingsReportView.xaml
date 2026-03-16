@@ -124,7 +124,8 @@
                             <Setter Property="Visibility" Value="Collapsed" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsRecentlyUpdated}" Value="True">
-                            <Setter Property="Background" Value="#3400BFFF" />
+                            <!-- subtle highlight for recently updated rows: light blue with low alpha -->
+                            <Setter Property="Background" Value="#2000BFFF" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsRecentlyPolled}" Value="True">
                             <Setter Property="Background" Value="#40FF0000" />
