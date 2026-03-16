@@ -49,8 +49,8 @@
                     <StackPanel>
                         <!-- PL values above the buttons, stacked vertically (left-aligned) -->
                         <StackPanel Orientation="Vertical" HorizontalAlignment="Left" Margin="0,0,0,6">
-                            <TextBlock Text="{Binding AlertServerHeartbeat}" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
-                            <TextBlock Text="{Binding AlertServerRunning}" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
+                            <TextBlock x:Name="TxtServerHeartbeat" Text="{Binding AlertServerHeartbeat}" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
+                            <TextBlock x:Name="TxtServerRunning" Text="{Binding AlertServerRunning}" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
                             <TextBlock x:Name="TxtTotalPLTop" Text="0.00 €" Foreground="White" FontWeight="Bold" HorizontalAlignment="Left" />
                             <TextBlock x:Name="TxtTotalPLTopDeltaStart" Text="" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
                             <TextBlock x:Name="TxtTotalPLTopDeltaPrev" Text="" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />

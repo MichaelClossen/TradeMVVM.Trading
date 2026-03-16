@@ -838,6 +838,8 @@ namespace TradeMVVM.Trading.Views.Charts
         private string _lastStatusProcessesText = string.Empty;
         private string _lastStatusStocksText = string.Empty;
         private string _lastStatusHistoryText = string.Empty;
+        private string _lastServerHeartbeatText = string.Empty;
+        private string _lastServerRunningText = string.Empty;
         // flag to ensure top-plot DB history is loaded once after axes/layout are initialized
         private bool _topPlotHistoryLoaded = false;
 
@@ -883,6 +885,21 @@ namespace TradeMVVM.Trading.Views.Charts
                 try
                 {
                     TxtTotalPLTop.Text = TxtTotalPL.Text; // This line is unchanged
+                    // initialize server heartbeat/running display from service immediately
+                    try
+                    {
+                        var svc = new TradeMVVM.Trading.Services.ServerControlService();
+                        var hb = svc.GetLastHeartbeat();
+                        string hbText = hb.HasValue ? hb.Value.ToString("dd.MM.yyyy HH:mm:ss") : "No heartbeat";
+                        string runningText = svc.IsPollingEnabled() ? "Server running" : "Server stopped";
+                        _alertVm.AlertServerHeartbeat = hbText;
+                        _alertVm.AlertServerRunning = runningText;
+                        _lastServerHeartbeatText = hbText;
+                        _lastServerRunningText = runningText;
+                        try { TxtServerHeartbeat.Text = hbText; } catch { }
+                        try { TxtServerRunning.Text = runningText; } catch { }
+                    }
+                    catch { }
                 }
                 catch { }
 
@@ -1890,7 +1907,24 @@ namespace TradeMVVM.Trading.Views.Charts
                     var hb = svc.GetLastHeartbeat();
                     string hbText = hb.HasValue ? hb.Value.ToString("dd.MM.yyyy HH:mm:ss") : "No heartbeat";
                     string runningText = svc.IsPollingEnabled() ? "Server running" : "Server stopped";
-                    try { if (_alertVm != null) { _alertVm.AlertServerHeartbeat = hbText; _alertVm.AlertServerRunning = runningText; } } catch { }
+                    // only update VM when values changed to avoid unnecessary property change notifications
+                    try
+                    {
+                        if (_alertVm != null)
+                        {
+                            if (!string.Equals(_lastServerHeartbeatText, hbText, StringComparison.Ordinal))
+                            {
+                                _alertVm.AlertServerHeartbeat = hbText;
+                                _lastServerHeartbeatText = hbText;
+                            }
+                            if (!string.Equals(_lastServerRunningText, runningText, StringComparison.Ordinal))
+                            {
+                                _alertVm.AlertServerRunning = runningText;
+                                _lastServerRunningText = runningText;
+                            }
+                        }
+                    }
+                    catch { }
                 }
                 catch { }
 
