@@ -9,6 +9,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using TradeMVVM.Domain;
+using TradeMVVM.Trading.Infrastructure;
 
 #nullable enable
 
@@ -153,7 +154,7 @@ namespace TradeMVVM.Trading.Services
                 }
                 catch (Exception ex)
                 {
-                    try { Console.WriteLine($"TryBnpAsync exception for {isin}: {ex.Message}"); } catch { }
+                    try { Logger.ThrottledInfo($"TryBnpAsync.{isin}", $"TryBnpAsync exception for {isin}: {ex.Message}"); } catch { }
                 }
                 finally
                 {
@@ -175,7 +176,7 @@ namespace TradeMVVM.Trading.Services
                 }
                 catch (Exception ex)
                 {
-                    try { Console.WriteLine($"TryDefaultAsync exception for {isin}: {ex.Message}"); } catch { }
+                    try { Logger.ThrottledInfo($"TryDefaultAsync.{isin}", $"TryDefaultAsync exception for {isin}: {ex.Message}"); } catch { }
                 }
                 finally
                 {

@@ -4,6 +4,7 @@ using System.Linq;
 using TradeMVVM.Trading.Data;
 using System.Collections.Generic;
 using System.Diagnostics;
+using TradeMVVM.Trading.Infrastructure;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
@@ -472,44 +473,61 @@ namespace TradeMVVM.Trading.Views.Charts
                 if (hist == null || hist.Count == 0)
                     return false;
 
-                // Work in UTC date space to avoid timezone mismatches
-                var lastUtc = lastTime.Kind == DateTimeKind.Utc ? lastTime : lastTime.ToUniversalTime();
-                var target = lastUtc.Date.AddDays(-1);
+                // Use local date-space to find the previous business day to avoid UTC/local conversion pitfalls.
+                var lastLocal = lastTime.Kind == DateTimeKind.Utc ? lastTime.ToLocalTime() : lastTime;
+                var target = lastLocal.Date.AddDays(-1);
                 while (target.DayOfWeek == DayOfWeek.Saturday || target.DayOfWeek == DayOfWeek.Sunday)
                     target = target.AddDays(-1);
 
-                // prefer the last measurement on the previous business day (UTC)
+                // prefer the last measurement on the previous business day (local)
                 var exact = hist
-                    .Where(t => t.Item1.ToUniversalTime().Date == target)
-                    .OrderByDescending(t => t.Item1)
-                    .ToList();
-                if (exact.Count > 0)
-                {
-                    var pick = exact[0];
-                    prevTime = pick.Item1;
-                    prevValue = pick.Item2;
-                    return true;
-                }
-
-                // fallback: take the latest entry up to the end of that previous business day
-                var endOfTargetUtc = target.AddDays(1);
-                var beforeEnd = hist
-                    .Where(t => t.Item1.ToUniversalTime() < endOfTargetUtc)
+                    .Where(t => t.Item1.ToLocalTime().Date == target)
                     .OrderByDescending(t => t.Item1)
                     .FirstOrDefault();
-                if (beforeEnd != null)
+                if (exact != null)
                 {
-                    prevTime = beforeEnd.Item1;
-                    prevValue = beforeEnd.Item2;
+                    prevTime = exact.Item1;
+                    prevValue = exact.Item2;
                     return true;
                 }
 
-                // final fallback: nearest earlier entry before the provided lastTime
-                var earlier = hist.Where(t => t.Item1 < lastTime).OrderByDescending(t => t.Item1).FirstOrDefault();
-                if (earlier != null)
+                // If the previous business day has no entries, search backwards day-by-day
+                // until we find the most recent earlier calendar day that contains at least one sample.
+                try
                 {
-                    prevTime = earlier.Item1;
-                    prevValue = earlier.Item2;
+                    var earliestDate = hist.Min(t => t.Item1.ToLocalTime().Date);
+                    var searchDate = target.AddDays(-1);
+                    while (searchDate >= earliestDate)
+                    {
+                        // skip weekends
+                        if (searchDate.DayOfWeek == DayOfWeek.Saturday || searchDate.DayOfWeek == DayOfWeek.Sunday)
+                        {
+                            searchDate = searchDate.AddDays(-1);
+                            continue;
+                        }
+
+                        var dayEntry = hist
+                            .Where(t => t.Item1.ToLocalTime().Date == searchDate)
+                            .OrderByDescending(t => t.Item1)
+                            .FirstOrDefault();
+                        if (dayEntry != null)
+                        {
+                            prevTime = dayEntry.Item1;
+                            prevValue = dayEntry.Item2;
+                            return true;
+                        }
+
+                        searchDate = searchDate.AddDays(-1);
+                    }
+                }
+                catch { }
+
+                // Final fallback: take the latest available entry strictly before the current date.
+                var fallback = hist.Where(t => t.Item1.ToLocalTime().Date < lastLocal.Date).OrderByDescending(t => t.Item1).FirstOrDefault();
+                if (fallback != null)
+                {
+                    prevTime = fallback.Item1;
+                    prevValue = fallback.Item2;
                     return true;
                 }
             }
@@ -935,6 +953,17 @@ namespace TradeMVVM.Trading.Views.Charts
             try
             {
                 _settingsService = App.Services?.GetService(typeof(SettingsService)) as SettingsService;
+            }
+            catch { }
+
+            // Default the manual previous-date picker to yesterday (editable by user).
+            try
+            {
+                var dp = this.FindName("DpPrevBusinessDate") as System.Windows.Controls.DatePicker;
+                if (dp != null && !dp.SelectedDate.HasValue)
+                {
+                    dp.SelectedDate = DateTime.Now.Date.AddDays(-1);
+                }
             }
             catch { }
 
@@ -1507,23 +1536,51 @@ namespace TradeMVVM.Trading.Views.Charts
             {
                 // Use dispatcher timer to update the top-area PL label from the DB's TotalPLHistory.
                 // The top display must reflect the server-written DB value (single source of truth).
-                var mirrorTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+                // Reduce frequency and DB work to avoid excessive logging and CPU usage.
+                var mirrorTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
                 string lastText = null;
                 mirrorTimer.Tick += (s, e) =>
                 {
                     try
                     {
-                        try
-                        {
+                            try
+                            {
                             var db = new DatabaseService();
-                            var hist = db.LoadTotalPLHistory();
-                            try { Trace.WriteLine($"MirrorTimer: LoadTotalPLHistory returned {hist?.Count ?? 0} rows"); } catch { }
+                            // Try to fetch a useful TotalPL history window including previous business day.
+                            // Declare `hist` outside the try so the result can be used below; if this
+                            // initial fetch yields no rows, fall back to other queries.
+                            List<Tuple<DateTime, double>> hist = null;
+                            try
+                            {
+                                var nowLocal = DateTime.Now;
+                                var todayStart = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day);
+                                var prevBusiness = todayStart.AddDays(-1);
+                                while (prevBusiness.DayOfWeek == DayOfWeek.Saturday || prevBusiness.DayOfWeek == DayOfWeek.Sunday)
+                                    prevBusiness = prevBusiness.AddDays(-1);
+
+                                hist = db.LoadTotalPLHistoryBetween(prevBusiness, DateTime.Now);
+                                try { Logger.ThrottledInfo("MirrorTimer.LoadTotalPLHistory", $"LoadTotalPLHistoryBetween returned {hist?.Count ?? 0} rows (from {prevBusiness:yyyy-MM-dd} to now)"); } catch { }
+                            }
+                            catch (Exception ex)
+                            {
+                                try { Logger.ThrottledInfo("MirrorTimer.LoadTotalPLHistory.err", ex.Message); } catch { }
+                            }
+
+                            // If the preferred query returned nothing, obtain fallbacks (single most recent row
+                            // or a 48h window) so the UI can still display something.
+                            if (hist == null || hist.Count == 0)
+                            {
+                                var histFallback = db.LoadTotalPLHistory(1);
+                                var histToUse = histFallback;
+                                try { var tmp = db.LoadTotalPLHistoryBetween(DateTime.Now.AddDays(-2), DateTime.Now); if (tmp != null && tmp.Count > 0) histToUse = tmp; } catch { }
+                                hist = histToUse;
+                            }
                             if (hist != null && hist.Count > 0)
                             {
                                 var lastItem = hist[hist.Count - 1];
                                 var last = lastItem.Item2; // value in €
                                 var lastTime = lastItem.Item1;
-                                try { Trace.WriteLine($"MirrorTimer: lastTime={lastTime:O}, last={last}"); } catch { }
+                                try { Logger.ThrottledInfo("MirrorTimer.last", $"lastTime={lastTime:O}, last={last}"); } catch { }
                                 var culture = CultureInfo.GetCultureInfo("de-DE");
                                 TxtTotalPLTop.Text = string.Format(culture, "{0:0.00} €", last);
                                 TxtTotalPLTop.Foreground = last >= 0 ? PositivePlBrush : NegativePlBrush;
@@ -1537,38 +1594,88 @@ namespace TradeMVVM.Trading.Views.Charts
                                         var tbStart = this.FindName("TxtTotalPLTopDeltaStart") as System.Windows.Controls.TextBlock;
                                         var tbPrev = this.FindName("TxtTotalPLTopDeltaPrev") as System.Windows.Controls.TextBlock;
 
-                                        // start of day delta
+                                        // start of day delta: explicitly query DB for today's earliest sample to avoid any
+                                        // timezone/heuristic issues when searching in the already-loaded `hist` list.
                                         try
                                         {
-                                            var startEntry = hist.Where(t => t.Item1.Date == lastTime.Date).OrderBy(t => t.Item1).FirstOrDefault();
-                                            if (startEntry != null)
+                                            try
                                             {
-                                                var startVal = startEntry.Item2;
-                                                var deltaStart = last - startVal;
-                                                double pctStart = double.NaN;
-                                                if (Math.Abs(startVal) > 1e-12)
-                                                    pctStart = (deltaStart / Math.Abs(startVal)) * 100.0;
-                                                var txtStart = string.Format(culture, "Δ seit Tagesbeginn: {0:+0.00;-0.00;0.00} €", deltaStart);
-                                                var pctTxtStart = double.IsNaN(pctStart) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctStart);
-                                                if (tbStart != null) { tbStart.Text = txtStart + pctTxtStart; tbStart.Foreground = deltaStart >= 0 ? PositivePlBrush : NegativePlBrush; }
+                                                var db2 = new DatabaseService();
+                                                var nowLocal2 = DateTime.Now;
+                                                var todayStart2 = new DateTime(nowLocal2.Year, nowLocal2.Month, nowLocal2.Day);
+                                                var todays = db2.LoadTotalPLHistoryBetween(todayStart2, DateTime.Now);
+                                                var startEntry = todays?.OrderBy(t => t.Item1).FirstOrDefault();
+                                                if (startEntry != null)
+                                                {
+                                                    var startVal = startEntry.Item2;
+                                                    var deltaStart = last - startVal;
+                                                    double pctStart = double.NaN;
+                                                    if (Math.Abs(startVal) > 1e-12)
+                                                        pctStart = (deltaStart / Math.Abs(startVal)) * 100.0;
+                                                    var txtStart = string.Format(culture, "Δ seit Tagesbeginn: {0:+0.00;-0.00;0.00} €", deltaStart);
+                                                    var pctTxtStart = double.IsNaN(pctStart) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctStart);
+                                                    if (tbStart != null) { tbStart.Text = txtStart + pctTxtStart; tbStart.Foreground = deltaStart >= 0 ? PositivePlBrush : NegativePlBrush; }
+                                                }
+                                                else
+                                                {
+                                                    if (tbStart != null) tbStart.Text = string.Empty;
+                                                }
                                             }
-                                            else
-                                            {
-                                                if (tbStart != null) tbStart.Text = string.Empty;
-                                            }
+                                            catch { if (tbStart != null) tbStart.Text = string.Empty; }
                                         }
                                         catch { if (tbStart != null) tbStart.Text = string.Empty; }
 
-                                        // previous business day delta
+                                        // previous business day delta (respect manual date picker if set)
                                         try
                                         {
-                                            if (TryGetPreviousBusinessDayValue(hist, lastTime, out var prevTime, out var prevValue))
+                                            DateTime prevTimeLocal = DateTime.MinValue;
+                                            double prevValue = 0.0;
+                                            bool foundPrev = false;
+
+                                            try
+                                            {
+                                                var dp = this.FindName("DpPrevBusinessDate") as System.Windows.Controls.DatePicker;
+                                                if (dp != null && dp.SelectedDate.HasValue)
+                                                {
+                                                    // user explicitly selected a date: prefer that date (local) first
+                                                    var selDate = dp.SelectedDate.Value.Date;
+                                                    try
+                                                    {
+                                                        // Query DB for that calendar date to get the last sample on that date
+                                                        var start = new DateTime(selDate.Year, selDate.Month, selDate.Day, 0, 0, 0);
+                                                        var end = start.AddDays(1);
+                                                        var dayHist = db.LoadTotalPLHistoryBetween(start, end);
+                                                        var entry = dayHist?.OrderByDescending(t => t.Item1).FirstOrDefault();
+                                                        if (entry != null)
+                                                        {
+                                                            prevTimeLocal = entry.Item1;
+                                                            prevValue = entry.Item2;
+                                                            foundPrev = true;
+                                                        }
+                                                    }
+                                                    catch { }
+                                                }
+                                            }
+                                            catch { }
+
+                                            // fallback to automatic detection if manual date not set or no entries on that date
+                                            if (!foundPrev)
+                                            {
+                                                if (TryGetPreviousBusinessDayValue(hist, lastTime, out var autoPrevTime, out var autoPrevValue))
+                                                {
+                                                    prevTimeLocal = autoPrevTime;
+                                                    prevValue = autoPrevValue;
+                                                    foundPrev = true;
+                                                }
+                                            }
+
+                                            if (foundPrev)
                                             {
                                                 var deltaPrev = last - prevValue;
                                                 double pctPrev = double.NaN;
                                                 if (Math.Abs(prevValue) > 1e-12)
                                                     pctPrev = (deltaPrev / Math.Abs(prevValue)) * 100.0;
-                                                var txtPrev = string.Format(culture, "Δ zum {0:dd.MM.yyyy}: {1:+0.00;-0.00;0.00} €", prevTime, deltaPrev);
+                                                var txtPrev = string.Format(culture, "Δ zum {0:dd.MM.yyyy}: {1:+0.00;-0.00;0.00} €", prevTimeLocal.ToLocalTime(), deltaPrev);
                                                 var pctTxtPrev = double.IsNaN(pctPrev) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctPrev);
                                                 if (tbPrev != null) { tbPrev.Text = txtPrev + pctTxtPrev; tbPrev.Foreground = deltaPrev >= 0 ? PositivePlBrush : NegativePlBrush; }
                                             }
@@ -1594,11 +1701,11 @@ namespace TradeMVVM.Trading.Views.Charts
                                         if (!_stockTopData.TryGetValue("zero", out var list) || list == null)
                                             list = new List<Tuple<DateTime, double>>();
                                         // append if newer than last stored point to avoid duplicates
-                                        if (list.Count == 0 || list[list.Count - 1].Item1 < lastTime)
+                                            if (list.Count == 0 || list[list.Count - 1].Item1 < lastTime)
                                         {
                                             list.Add(new Tuple<DateTime, double>(lastTime, displayVal));
                                             _stockTopData["zero"] = list;
-                                            try { Trace.WriteLine($"MirrorTimer: appended point {lastTime:O} -> {displayVal} k€ (list now {list.Count})"); } catch { }
+                                            try { Logger.ThrottledInfo("MirrorTimer.appended", $"appended point {lastTime:O} -> {displayVal} k€ (list now {list.Count})"); } catch { }
                                         }
                                     }
                                     try { _stockTopChartManager.Render(_stockTopData); } catch { }

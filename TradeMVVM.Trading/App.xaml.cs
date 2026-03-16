@@ -5,6 +5,7 @@ using TradeMVVM.Trading.Presentation.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 using TradeMVVM.Trading.Services.Di;
+using TradeMVVM.Trading.Infrastructure;
 
 namespace TradeMVVM.Trading
 {
@@ -29,6 +30,7 @@ namespace TradeMVVM.Trading
 
             this.DispatcherUnhandledException += (s, ev) =>
             {
+                try { TradeMVVM.Trading.Infrastructure.Logger.LogException(ev.Exception, "DispatcherUnhandledException"); } catch { }
                 TryStopAndCleanup();
             };
 
@@ -39,11 +41,13 @@ namespace TradeMVVM.Trading
             // also handle non-UI unhandled exceptions and unobserved task exceptions
             AppDomain.CurrentDomain.UnhandledException += (s, ev) =>
             {
+                try { TradeMVVM.Trading.Infrastructure.Logger.LogUnhandled(ev.ExceptionObject, "AppDomain.CurrentDomain.UnhandledException"); } catch { }
                 TryStopAndCleanup();
             };
 
             TaskScheduler.UnobservedTaskException += (s, ev) =>
             {
+                try { TradeMVVM.Trading.Infrastructure.Logger.LogException(ev.Exception, "TaskScheduler.UnobservedTaskException"); } catch { }
                 TryStopAndCleanup();
             };
 
@@ -141,7 +145,10 @@ namespace TradeMVVM.Trading
                 }
                 catch { }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                try { Logger.LogException(ex, "TryStopAndCleanup"); } catch { }
+            }
         }
     }
 }

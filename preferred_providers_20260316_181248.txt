@@ -1,0 +1,3 @@
+DE000BASF111,Gettex,BASF
+DE0007664039,Gettex,Volkswagen Vz.
+IE00B5L8K969,Gettex,iShares MSCI Emerging Markets Asia (Acc)

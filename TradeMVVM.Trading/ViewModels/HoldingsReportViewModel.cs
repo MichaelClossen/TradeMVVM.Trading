@@ -243,17 +243,13 @@ namespace TradeMVVM.Trading.ViewModels
                 {
                     try
                     {
-                        // write snapshot directly to DB to avoid cross-assembly DatabaseService resolution issues
+                        // write snapshot into the application's main DB via DatabaseService so a single
+                        // source of truth is used (avoid writing to a hard-coded trading.db file)
                         try
                         {
-                            using (var conn = new SQLiteConnection("Data Source=trading.db"))
-                            {
-                                conn.Open();
-                                var cmd = new SQLiteCommand("INSERT INTO TotalPLHistory (Time, TotalPL) VALUES (@time, @total);", conn);
-                                cmd.Parameters.AddWithValue("@time", DateTime.UtcNow);
-                                cmd.Parameters.AddWithValue("@total", TotalPL);
-                                cmd.ExecuteNonQuery();
-                            }
+                            var db = new TradeMVVM.Trading.Services.DatabaseService();
+                            // Persist unrealized PL only to match ChartsView top-plot (sum of unrealized values)
+                            db.InsertTotalPLHistory(DateTime.UtcNow, TotalUnrealizedPL);
                         }
                         catch { }
                     }

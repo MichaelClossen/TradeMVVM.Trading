@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using TradeMVVM.Trading.Infrastructure;
 using System.Collections.Generic;
 using System.Linq;
 using System.Data.SQLite;
@@ -101,7 +102,7 @@ namespace TradeMVVM.Trading.Services
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"DB: InsertTotalPLHistory failed: {ex.Message}");
+                    try { Logger.LogException(ex, "InsertTotalPLHistory"); } catch { }
                     return;
                 }
             }
@@ -132,7 +133,7 @@ namespace TradeMVVM.Trading.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"DB: LoadTotalPLHistoryBetween failed: {ex.Message}");
+                try { Logger.LogException(ex, "LoadTotalPLHistoryBetween"); } catch { }
             }
             return list;
         }
@@ -180,7 +181,7 @@ namespace TradeMVVM.Trading.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"DB: ReplaceTotalPLHistoryRange failed: {ex.Message}");
+                try { Logger.LogException(ex, "ReplaceTotalPLHistoryRange"); } catch { }
             }
         }
 
@@ -262,11 +263,22 @@ namespace TradeMVVM.Trading.Services
             }
             catch { }
 
-            // Default to the absolute development DB path so GUI and server share the same file during development
+            // Prefer an explicit desktop "Trade" folder DB so all components use the same file.
             try
             {
-                var dev = Path.Combine("C:", "Users", "micha", "Desktop", "Trade", "trading.db");
-                return $"Data Source={dev}";
+                var desktopTrade = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Trade", "trading.db");
+                try { Trace.TraceInformation($"DatabaseService: preferring desktop Trade DB at {desktopTrade}"); } catch { }
+                return $"Data Source={desktopTrade}";
+            }
+            catch { }
+
+            // Prefer an application-local database file in the app base directory to ensure all
+            // components of the application use the same file regardless of current working dir.
+            try
+            {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory ?? Directory.GetCurrentDirectory();
+                var candidate = Path.Combine(baseDir, "trading.db");
+                return $"Data Source={candidate}";
             }
             catch { }
 
@@ -373,6 +385,38 @@ namespace TradeMVVM.Trading.Services
                             var csb = new SQLiteConnectionStringBuilder(connStr);
                             var dbFile = csb.DataSource;
                             try { Trace.TraceInformation($"DatabaseService: using DB file '{dbFile}'"); } catch { }
+
+                            // diagnostic: look for other trading.db files in parent directories to detect multiple DB copies
+                            try
+                            {
+                                var dir = Path.GetDirectoryName(dbFile) ?? AppDomain.CurrentDomain.BaseDirectory;
+                                var found = new List<string>();
+                                var cur = dir;
+                                for (int i = 0; i < 6 && !string.IsNullOrEmpty(cur); i++)
+                                {
+                                    try
+                                    {
+                                        var p = Path.Combine(cur, "trading.db");
+                                        if (File.Exists(p) && !string.Equals(Path.GetFullPath(p), Path.GetFullPath(dbFile), StringComparison.OrdinalIgnoreCase))
+                                            found.Add(p);
+                                        var data = Path.Combine(cur, "Data", "trading.db");
+                                        if (File.Exists(data) && !string.Equals(Path.GetFullPath(data), Path.GetFullPath(dbFile), StringComparison.OrdinalIgnoreCase))
+                                            found.Add(data);
+                                    }
+                                    catch { }
+                                    var parent = Path.GetDirectoryName(cur);
+                                    if (string.IsNullOrEmpty(parent) || parent == cur) break;
+                                    cur = parent;
+                                }
+                                if (found.Count > 0)
+                                {
+                                    foreach (var f in found.Distinct())
+                                    {
+                                        try { Trace.TraceInformation($"DatabaseService: found other trading.db candidate: {f} (size={new FileInfo(f).Length} bytes)"); } catch { }
+                                    }
+                                }
+                            }
+                            catch { }
 
                             using (var conn = new SQLiteConnection(connStr))
                             {
@@ -1193,8 +1237,14 @@ namespace TradeMVVM.Trading.Services
             using (var conn = new SQLiteConnection(_connection))
             {
                 conn.Open();
-                string sql = "SELECT Time, TotalPL FROM TotalPLHistory ORDER BY Time ASC";
-                if (maxRows > 0) sql += " LIMIT " + maxRows.ToString();
+                // When a maxRows limit is requested, prefer returning the most recent rows.
+                // To keep the API consistent (ascending order), we fetch descending and then reverse.
+                string sql;
+                if (maxRows > 0)
+                    sql = "SELECT Time, TotalPL FROM TotalPLHistory ORDER BY Time DESC LIMIT " + maxRows.ToString();
+                else
+                    sql = "SELECT Time, TotalPL FROM TotalPLHistory ORDER BY Time ASC";
+
                 var cmd = new SQLiteCommand(sql, conn);
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -1204,6 +1254,12 @@ namespace TradeMVVM.Trading.Services
                         var total = reader.IsDBNull(1) ? 0.0 : reader.GetDouble(1);
                         list.Add(new Tuple<DateTime, double>(time, total));
                     }
+                }
+
+                if (maxRows > 0)
+                {
+                    // currently list is in DESC order (newest first) — reverse to ASC to preserve previous behavior
+                    list.Reverse();
                 }
             }
             return list;

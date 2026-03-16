@@ -61,7 +61,12 @@
                         <StackPanel Orientation="Vertical" HorizontalAlignment="Left">
                             <TextBlock x:Name="TxtTotalPLTop" Text="0.00 €" Foreground="White" FontWeight="Bold" HorizontalAlignment="Left" FontSize="16" />
                             <TextBlock x:Name="TxtTotalPLTopDeltaStart" Text="" Foreground="LightGreen" FontSize="12" HorizontalAlignment="Left" Margin="0,6,0,0" />
-                            <TextBlock x:Name="TxtTotalPLTopDeltaPrev" Text="" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" />
+                            <!-- Inline row: manual date picker on the left, previous-day delta label to the right -->
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="Datum (manuell):" Foreground="LightGray" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11" />
+                                <DatePicker x:Name="DpPrevBusinessDate" Width="130" SelectedDateFormat="Short" />
+                                <TextBlock x:Name="TxtTotalPLTopDeltaPrev" Text="" Foreground="LightGray" FontSize="12" HorizontalAlignment="Left" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                    

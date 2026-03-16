@@ -1,0 +1,6 @@
+Full scan started 2026-03-16T18:12:48.3649127Z
+ISIN=DE000BASF111 price=48,27 percent=0,1 provider=Gettex
+ISIN=DE0007664039 price=88,48 percent=-1,29 provider=Gettex
+ISIN=IE00B5L8K969 price=221,65 percent=2,03 provider=Gettex
+Full scan finished 2026-03-16T18:12:53.2445709Z elapsed=00:00:04.8812478
+Checked=3 Failed=0

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TradeMVVM.Trading.Chart;
 using TradeMVVM.Trading.Data;
 using TradeMVVM.Trading.Services;
+using TradeMVVM.Trading.Infrastructure;
 using System.Windows.Input;
 using System.Collections.ObjectModel;
 using TradeMVVM.Trading.Models;
@@ -21,6 +22,8 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
 {
     public class MainViewModel : BaseViewModel, IDisposable
     {
+        private CancellationTokenSource _holdingsUpdateCts = null;
+        private readonly object _holdingsUpdateLock = new object();
         private readonly TradeMVVM.Trading.Services.SettingsService _settingsService;
         private readonly TradeMVVM.Trading.Services.ServerControlService _serverControl;
         private PricePollingService _pollingService;
@@ -67,6 +70,9 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         // currently owned positions (isin, name, shares) for holdings with shares > 0
         private readonly List<(string isin, string name, double shares)> _ownedPositions =
             new List<(string, string, double)>();
+
+        // last owned ISINs snapshot to avoid redundant updates/log spam
+        private HashSet<string> _lastOwnedIsins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public IReadOnlyList<(string isin, string name, double shares)> OwnedPositions => _ownedPositions.AsReadOnly();
 
@@ -178,8 +184,29 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
 
         private void OnHoldingsUpdated(List<TradeMVVM.Trading.DataAnalysis.Holding> holdings)
         {
-            // update stocks whenever holdings viewmodel refreshes
-            UpdateStocksFromHoldings(holdings ?? Enumerable.Empty<TradeMVVM.Trading.DataAnalysis.Holding>());
+            // debounce frequent holdings updates: schedule UpdateStocksFromHoldings after short delay
+            try
+            {
+                lock (_holdingsUpdateLock)
+                {
+                    try { _holdingsUpdateCts?.Cancel(); } catch { }
+                    _holdingsUpdateCts = new CancellationTokenSource();
+                    var token = _holdingsUpdateCts.Token;
+                    // capture snapshot
+                    var snap = holdings == null ? null : new List<TradeMVVM.Trading.DataAnalysis.Holding>(holdings);
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(300, token).ConfigureAwait(false);
+                            if (token.IsCancellationRequested) return;
+                            try { UpdateStocksFromHoldings(snap ?? Enumerable.Empty<TradeMVVM.Trading.DataAnalysis.Holding>()); } catch { }
+                        }
+                        catch { }
+                    }, token);
+                }
+            }
+            catch { }
         }
 
         public MainViewModel(DualZoomController zoomController)
@@ -420,13 +447,38 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
         // update the polling stock list based on currently held positions
         private void UpdateStocksFromHoldings(IEnumerable<TradeMVVM.Trading.DataAnalysis.Holding> holdings)
         {
+            // build set of current holdings ISINs (positive shares)
+            var currentIsins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var h in holdings)
+            {
+                try
+                {
+                    if (h.Shares <= 0) continue;
+                    var normalizedIsin = (h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant();
+                    if (string.IsNullOrWhiteSpace(normalizedIsin)) continue;
+                    currentIsins.Add(normalizedIsin);
+                }
+                catch { }
+            }
+
+            // if the set of owned ISINs did not change, skip rebuilding stocks to avoid churn
+            try
+            {
+                if (currentIsins.SetEquals(_lastOwnedIsins))
+                {
+                    // nothing changed
+                    try { Logger.ThrottledInfo("UpdateStocksFromHoldings.nochange", $"UpdateStocksFromHoldings: no change (count={currentIsins.Count})", TimeSpan.FromSeconds(10)); } catch { }
+                    return;
+                }
+            }
+            catch { }
+
             _ownedPositions.Clear();
 
             foreach (var h in holdings.OrderBy(h => h.ISIN))
             {
                 if (h.Shares <= 0)
                     continue;
-
                 var normalizedIsin = (h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim().ToUpperInvariant();
                 if (string.IsNullOrWhiteSpace(normalizedIsin))
                     continue;
@@ -453,7 +505,15 @@ namespace TradeMVVM.Trading.Presentation.ViewModels
                 _stocks.AddRange(newStocks);
             }
 
-            System.Diagnostics.Debug.WriteLine($"UpdateStocksFromHoldings: {_stocks.Count} ISINs: {string.Join(", ", _stocks.Select(s => s.isin_wkn))}");
+            // remember last owned isins to avoid repeating same update
+            try { _lastOwnedIsins = new HashSet<string>(currentIsins, StringComparer.OrdinalIgnoreCase); } catch { }
+
+            try
+            {
+                var sample = string.Join(", ", _stocks.Take(5).Select(s => s.isin_wkn));
+                Logger.ThrottledInfo("UpdateStocksFromHoldings", $"UpdateStocksFromHoldings: {_stocks.Count} ISINs (sample: {sample})", TimeSpan.FromSeconds(10));
+            }
+            catch { }
         }
 
         private async Task GenerateHoldingsAsync()

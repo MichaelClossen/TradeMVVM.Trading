@@ -240,7 +240,7 @@ namespace TradeMVVM.Trading.Views
             _isRefreshInProgress = true;
             try
             {
-                try { System.Diagnostics.Debug.WriteLine($"RefreshViews start: Stocks={_vm?.Stocks?.Count ?? 0}, PriceHistoryKeys={_vm?.PriceHistory?.Count ?? 0}"); } catch { }
+                try { TradeMVVM.Trading.Infrastructure.Logger.ThrottledInfo("RefreshViews.start", $"RefreshViews start: Stocks={_vm?.Stocks?.Count ?? 0}, PriceHistoryKeys={_vm?.PriceHistory?.Count ?? 0}", TimeSpan.FromSeconds(2)); } catch { }
                 if (WindowState == WindowState.Minimized)
                     return;
 
@@ -275,7 +275,7 @@ namespace TradeMVVM.Trading.Views
                     totalPoints += kv.Value?.Count ?? 0;
                 foreach (var kv in knockoutData)
                     totalPoints += kv.Value?.Count ?? 0;
-                try { System.Diagnostics.Debug.WriteLine($"RefreshViews: stockSeries={stockData.Count}, knockoutSeries={knockoutData.Count}, totalPoints={totalPoints}"); } catch { }
+                    try { TradeMVVM.Trading.Infrastructure.Logger.ThrottledInfo("RefreshViews.stats", $"RefreshViews: stockSeries={stockData.Count}, knockoutSeries={knockoutData.Count}, totalPoints={totalPoints}", TimeSpan.FromSeconds(2)); } catch { }
             }
             catch { }
 
