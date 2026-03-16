@@ -127,6 +127,198 @@ namespace TradeMVVM.Trading.Views.Charts
             catch { }
         }
 
+        // Refresh the top-area PL text and the two delta TextBlocks immediately.
+        // This is invoked when the user changes the manual previous-business-date picker.
+        private void RefreshTopDeltasImmediate()
+        {
+            try
+            {
+                var db = new DatabaseService();
+                var histAll = db.LoadTotalPLHistory();
+                if (histAll == null || histAll.Count == 0)
+                    return;
+
+                var lastItem = histAll[histAll.Count - 1];
+                var last = lastItem.Item2; // value in EUR
+                var lastTime = lastItem.Item1;
+
+                Action updateUi = () =>
+                {
+                    try
+                    {
+                        var culture = CultureInfo.GetCultureInfo("de-DE");
+                        try { TxtTotalPLTop.Text = string.Format(culture, "{0:0.00} €", last); TxtTotalPLTop.Foreground = last >= 0 ? PositivePlBrush : NegativePlBrush; } catch { }
+
+                        var tbStart = this.FindName("TxtTotalPLTopDeltaStart") as System.Windows.Controls.TextBlock;
+                        var tbPrev = this.FindName("TxtTotalPLTopDeltaPrev") as System.Windows.Controls.TextBlock;
+
+                        // start of day delta
+                        try
+                        {
+                            var nowLocal = DateTime.Now;
+                            var todayStart = new DateTime(nowLocal.Year, nowLocal.Month, nowLocal.Day);
+                            var todays = db.LoadTotalPLHistoryBetween(todayStart, DateTime.Now);
+                            var startEntry = todays?.OrderBy(t => t.Item1).FirstOrDefault();
+                            if (startEntry != null)
+                            {
+                                var startVal = startEntry.Item2;
+                                var deltaStart = last - startVal;
+                                double pctStart = double.NaN;
+                                if (Math.Abs(startVal) > 1e-12)
+                                    pctStart = (deltaStart / Math.Abs(startVal)) * 100.0;
+                                var txtStart = string.Format(culture, "Δ seit Tagesbeginn: {0:+0.00;-0.00;0.00} €", deltaStart);
+                                var pctTxtStart = double.IsNaN(pctStart) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctStart);
+                                if (tbStart != null) { tbStart.Text = txtStart + pctTxtStart; tbStart.Foreground = deltaStart >= 0 ? PositivePlBrush : NegativePlBrush; }
+                            }
+                            else
+                            {
+                                if (tbStart != null) tbStart.Text = string.Empty;
+                            }
+                        }
+                        catch { if (tbStart != null) tbStart.Text = string.Empty; }
+
+                        // previous business day delta (respect manual date picker if set)
+                        try
+                        {
+                            DateTime prevTimeLocal = DateTime.MinValue;
+                            double prevValue = 0.0;
+                            bool foundPrev = false;
+                            bool usedFallback = false;
+                            DateTime usedFallbackDate = DateTime.MinValue;
+
+                                try
+                                {
+                                    var dp = this.FindName("DpPrevBusinessDate") as System.Windows.Controls.DatePicker;
+                                    if (dp != null && dp.SelectedDate.HasValue)
+                                    {
+                                        var selDate = dp.SelectedDate.Value.Date;
+                                        try
+                                        {
+                                            var start = new DateTime(selDate.Year, selDate.Month, selDate.Day, 0, 0, 0);
+                                            var end = start.AddDays(1);
+                                            var dayHist = db.LoadTotalPLHistoryBetween(start, end);
+                                            var entry = dayHist?.OrderByDescending(t => t.Item1).FirstOrDefault();
+                                            if (entry != null)
+                                            {
+                                                prevTimeLocal = entry.Item1;
+                                                prevValue = entry.Item2;
+                                                foundPrev = true;
+                                            }
+                                            else
+                                            {
+                                                // If no entries on the selected date, pick the nearest earlier available sample
+                                                try
+                                                {
+                                                    var fallbackEarlier = histAll.Where(t => t.Item1.ToLocalTime().Date < selDate)
+                                                                                  .OrderByDescending(t => t.Item1)
+                                                                                  .FirstOrDefault();
+                                                    if (fallbackEarlier != null)
+                                                    {
+                                                        prevTimeLocal = fallbackEarlier.Item1;
+                                                        prevValue = fallbackEarlier.Item2;
+                                                        foundPrev = true;
+                                                        usedFallback = true;
+                                                        usedFallbackDate = prevTimeLocal.ToLocalTime().Date;
+                                                    }
+                                                    else
+                                                    {
+                                                        // If still not found, try the next available sample after the selected date
+                                                        try
+                                                        {
+                                                            var fallbackLater = histAll.Where(t => t.Item1.ToLocalTime().Date > selDate)
+                                                                                       .OrderBy(t => t.Item1)
+                                                                                       .FirstOrDefault();
+                                                            if (fallbackLater != null)
+                                                            {
+                                                                prevTimeLocal = fallbackLater.Item1;
+                                                                prevValue = fallbackLater.Item2;
+                                                                foundPrev = true;
+                                                                usedFallback = true;
+                                                                // indicate later date by storing date (will be used in message)
+                                                                usedFallbackDate = prevTimeLocal.ToLocalTime().Date;
+                                                            }
+                                                        }
+                                                        catch { }
+                                                    }
+                                                }
+                                                catch { }
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                }
+                                catch { }
+
+                            if (!foundPrev)
+                            {
+                                // Only attempt automatic previous-business-day detection when the user
+                                // did NOT explicitly provide a manual date. If a manual date was set
+                                // we already searched that date and nearby earlier/later samples above
+                                // and should not fall back to a business-day heuristic based on the
+                                // latest DB timestamp (lastTime) which can lead to surprising results.
+                                try
+                                {
+                                    var dpCheck = this.FindName("DpPrevBusinessDate") as System.Windows.Controls.DatePicker;
+                                    if (dpCheck == null || !dpCheck.SelectedDate.HasValue)
+                                    {
+                                        if (TryGetPreviousBusinessDayValue(histAll, lastTime, out var autoPrevTime, out var autoPrevValue))
+                                        {
+                                            prevTimeLocal = autoPrevTime;
+                                            prevValue = autoPrevValue;
+                                            foundPrev = true;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            if (foundPrev)
+                            {
+                                var deltaPrev = last - prevValue;
+                                double pctPrev = double.NaN;
+                                if (Math.Abs(prevValue) > 1e-12)
+                                    pctPrev = (deltaPrev / Math.Abs(prevValue)) * 100.0;
+                                var txtPrev = string.Format(culture, "Δ zum {0:dd.MM.yyyy}: {1:+0.00;-0.00;0.00} €", prevTimeLocal.ToLocalTime(), deltaPrev);
+                                var pctTxtPrev = double.IsNaN(pctPrev) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctPrev);
+                                if (tbPrev != null) { tbPrev.Text = txtPrev + pctTxtPrev; tbPrev.Foreground = deltaPrev >= 0 ? PositivePlBrush : NegativePlBrush; }
+
+                                // show short visual feedback when we used a fallback earlier-than-selected date
+                                if (usedFallback && usedFallbackDate != DateTime.MinValue)
+                                {
+                                    try
+                                    {
+                                        Dispatcher.BeginInvoke(new Action(() =>
+                                        {
+                                            try
+                                            {
+                                                TxtAlertToast.Text = $"(kein Eintrag am gewählten Datum — verwendet {usedFallbackDate:dd.MM.yyyy})";
+                                                TxtAlertToast.Visibility = System.Windows.Visibility.Visible;
+                                                _alertToastTimer?.Stop(); _alertToastTimer?.Start();
+                                            }
+                                            catch { }
+                                        }));
+                                    }
+                                    catch { }
+                                }
+                            }
+                            else
+                            {
+                                if (tbPrev != null) tbPrev.Text = string.Empty;
+                            }
+                        }
+                        catch { if (this.FindName("TxtTotalPLTopDeltaPrev") as System.Windows.Controls.TextBlock != null) ((System.Windows.Controls.TextBlock)this.FindName("TxtTotalPLTopDeltaPrev")).Text = string.Empty; }
+                    }
+                    catch { }
+                };
+
+                if (Dispatcher.CheckAccess())
+                    updateUi();
+                else
+                    Dispatcher.BeginInvoke(updateUi);
+            }
+            catch { }
+        }
+
         private void RefreshYAxisTextBoxesForPlot(ScottPlot.WPF.WpfPlot plot)
         {
             try
@@ -964,6 +1156,20 @@ namespace TradeMVVM.Trading.Views.Charts
                 {
                     dp.SelectedDate = DateTime.Now.Date.AddDays(-1);
                 }
+                // Refresh top-area deltas when user changes the manual previous-business-date picker
+                try
+                {
+                    if (dp != null)
+                    {
+                        // schedule work on the dispatcher to avoid blocking UI thread during DB access
+                        dp.SelectedDateChanged += (s, e) => { try { Dispatcher.BeginInvoke(new Action(() => { try { Logger.ThrottledInfo("ChartsView.Dp", "SelectedDateChanged fired"); } catch { } try { RefreshTopDeltasImmediate(); } catch { } })); } catch { } };
+                        // also handle CalendarClosed and focus/keyboard so manual text edits are applied immediately
+                        dp.CalendarClosed += (s, e) => { try { Dispatcher.BeginInvoke(new Action(() => { try { Logger.ThrottledInfo("ChartsView.Dp", "CalendarClosed fired"); } catch { } try { RefreshTopDeltasImmediate(); } catch { } })); } catch { } };
+                        dp.LostFocus += (s, e) => { try { Dispatcher.BeginInvoke(new Action(() => { try { Logger.ThrottledInfo("ChartsView.Dp", "LostFocus fired"); } catch { } try { RefreshTopDeltasImmediate(); } catch { } })); } catch { } };
+                        dp.KeyUp += (s, e) => { try { if (e.Key == System.Windows.Input.Key.Enter) Dispatcher.BeginInvoke(new Action(() => { try { Logger.ThrottledInfo("ChartsView.Dp", "KeyUp Enter fired"); } catch { } try { RefreshTopDeltasImmediate(); } catch { } })); } catch { } };
+                    }
+                }
+                catch { }
             }
             catch { }
 
@@ -1631,6 +1837,9 @@ namespace TradeMVVM.Trading.Views.Charts
                                             DateTime prevTimeLocal = DateTime.MinValue;
                                             double prevValue = 0.0;
                                             bool foundPrev = false;
+                                            bool usedFallback = false;
+                                            DateTime usedFallbackDate = DateTime.MinValue;
+                                            string usedFallbackInfo = null;
 
                                             try
                                             {
@@ -1658,15 +1867,62 @@ namespace TradeMVVM.Trading.Views.Charts
                                             }
                                             catch { }
 
-                                            // fallback to automatic detection if manual date not set or no entries on that date
+                                            // fallback: if the user provided a manual date, search the full DB for
+                                            // the nearest earlier sample; if none exists, take the first later
+                                            // sample. Only when no manual date was set fall back to the
+                                            // previous-business-day heuristic.
                                             if (!foundPrev)
                                             {
-                                                if (TryGetPreviousBusinessDayValue(hist, lastTime, out var autoPrevTime, out var autoPrevValue))
+                                                try
                                                 {
-                                                    prevTimeLocal = autoPrevTime;
-                                                    prevValue = autoPrevValue;
-                                                    foundPrev = true;
+                                                    var dp = this.FindName("DpPrevBusinessDate") as System.Windows.Controls.DatePicker;
+                                                    if (dp != null && dp.SelectedDate.HasValue)
+                                                    {
+                                                        var selDate = dp.SelectedDate.Value.Date;
+                                                        try
+                                                        {
+                                                            var full = db.LoadTotalPLHistory();
+                                                            if (full != null && full.Count > 0)
+                                                            {
+                                                                var earlier = full.Where(t => t.Item1.ToLocalTime().Date < selDate).OrderByDescending(t => t.Item1).FirstOrDefault();
+                                                                var later = full.Where(t => t.Item1.ToLocalTime().Date > selDate).OrderBy(t => t.Item1).FirstOrDefault();
+                                                                if (earlier != null)
+                                                                {
+                                                                    prevTimeLocal = earlier.Item1;
+                                                                    prevValue = earlier.Item2;
+                                                                    foundPrev = true;
+                                                                    usedFallback = true;
+                                                                    usedFallbackDate = prevTimeLocal.ToLocalTime().Date;
+                                                                    usedFallbackInfo = $"früher: {earlier.Item1.ToLocalTime():dd.MM.yyyy}";
+                                                                }
+                                                                else if (later != null)
+                                                                {
+                                                                    prevTimeLocal = later.Item1;
+                                                                    prevValue = later.Item2;
+                                                                    foundPrev = true;
+                                                                    usedFallback = true;
+                                                                    usedFallbackDate = prevTimeLocal.ToLocalTime().Date;
+                                                                    usedFallbackInfo = $"später: {later.Item1.ToLocalTime():dd.MM.yyyy}";
+                                                                }
+                                                                else
+                                                                {
+                                                                    // no candidates in full history (unlikely)
+                                                                }
+                                                            }
+                                                        }
+                                                        catch { }
+                                                    }
+                                                    else
+                                                    {
+                                                        if (TryGetPreviousBusinessDayValue(hist, lastTime, out var autoPrevTime, out var autoPrevValue))
+                                                        {
+                                                            prevTimeLocal = autoPrevTime;
+                                                            prevValue = autoPrevValue;
+                                                            foundPrev = true;
+                                                        }
+                                                    }
                                                 }
+                                                catch { }
                                             }
 
                                             if (foundPrev)
