@@ -36,7 +36,31 @@ jobs:
           }
 
       - name: Build
-        run: dotnet build --configuration Release --no-restore
+        shell: pwsh
+        run: |
+          $sln = Get-ChildItem -Path . -Filter '*.sln' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($sln) {
+            dotnet build $sln --configuration Release --no-restore
+          } else {
+            $slnx = Get-ChildItem -Path . -Filter '*.slnx' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($slnx) {
+              dotnet build $slnx --configuration Release --no-restore
+            } else {
+              Get-ChildItem -Recurse -Filter '*.csproj' | ForEach-Object { dotnet build $_.FullName --configuration Release --no-restore }
+            }
+          }
 
       - name: Test
-        run: dotnet test --no-build --verbosity normal
+        shell: pwsh
+        run: |
+          $sln = Get-ChildItem -Path . -Filter '*.sln' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($sln) {
+            dotnet test $sln --no-build --verbosity normal
+          } else {
+            $slnx = Get-ChildItem -Path . -Filter '*.slnx' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($slnx) {
+              dotnet test $slnx --no-build --verbosity normal
+            } else {
+              Get-ChildItem -Recurse -Filter '*Tests.csproj' | ForEach-Object { dotnet test $_.FullName --no-build --verbosity normal }
+            }
+          }
