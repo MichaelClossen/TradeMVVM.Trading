@@ -28,7 +28,17 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore
+        run: |
+          set -e
+          # If a solution file exists, restore it. If there is a non-standard .slnx use that.
+          if ls *.sln 1>/dev/null 2>&1; then
+            dotnet restore *.sln
+          elif ls *.slnx 1>/dev/null 2>&1; then
+            dotnet restore *.slnx
+          else
+            # No solution file found: restore each project individually to avoid MSB1011
+            find . -name '*.csproj' -print0 | xargs -0 -n1 dotnet restore
+          fi
 
       - name: Build
         run: dotnet build --configuration Release --no-restore
