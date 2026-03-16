@@ -31,6 +31,8 @@ namespace TradeMVVM.Trading.Views.Charts
             private string _history = string.Empty; public string AlertStatusHistory { get => _history; set { _history = value; Raise(nameof(AlertStatusHistory)); } }
             private string _time = string.Empty; public string AlertStatusTime { get => _time; set { _time = value; Raise(nameof(AlertStatusTime)); } }
             private string _msg = string.Empty; public string AlertMessage { get => _msg; set { _msg = value; Raise(nameof(AlertMessage)); } }
+            private string _serverHeartbeat = string.Empty; public string AlertServerHeartbeat { get => _serverHeartbeat; set { _serverHeartbeat = value; Raise(nameof(AlertServerHeartbeat)); } }
+            private string _serverRunning = string.Empty; public string AlertServerRunning { get => _serverRunning; set { _serverRunning = value; Raise(nameof(AlertServerRunning)); } }
         }
 
         private readonly AlertCenterVm _alertVm = new AlertCenterVm();
@@ -1880,6 +1882,17 @@ namespace TradeMVVM.Trading.Views.Charts
                 var timeText = DateTime.Now.ToString("HH:mm:ss");
                 TxtStatusTime.Text = timeText;
                 try { if (_alertVm != null) _alertVm.AlertStatusTime = timeText; } catch { }
+
+                // Server heartbeat and running status
+                try
+                {
+                    var svc = new TradeMVVM.Trading.Services.ServerControlService();
+                    var hb = svc.GetLastHeartbeat();
+                    string hbText = hb.HasValue ? hb.Value.ToString("dd.MM.yyyy HH:mm:ss") : "No heartbeat";
+                    string runningText = svc.IsPollingEnabled() ? "Server running" : "Server stopped";
+                    try { if (_alertVm != null) { _alertVm.AlertServerHeartbeat = hbText; _alertVm.AlertServerRunning = runningText; } } catch { }
+                }
+                catch { }
 
                 // ensure Alert-Center bindings always reflect the latest known status values
                 try
