@@ -27,12 +27,8 @@ jobs:
           if ($sln) {
             dotnet restore $sln
           } else {
-            $slnx = Get-ChildItem -Path . -Filter '*.slnx' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($slnx) {
-              dotnet restore $slnx
-            } else {
-              Get-ChildItem -Recurse -Filter '*.csproj' | ForEach-Object { dotnet restore $_.FullName }
-            }
+            # No solution file found: restore each project individually to avoid MSB1011
+            Get-ChildItem -Recurse -Filter '*.csproj' | ForEach-Object { dotnet restore $_.FullName }
           }
 
       - name: Build
@@ -42,12 +38,7 @@ jobs:
           if ($sln) {
             dotnet build $sln --configuration Release --no-restore
           } else {
-            $slnx = Get-ChildItem -Path . -Filter '*.slnx' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($slnx) {
-              dotnet build $slnx --configuration Release --no-restore
-            } else {
-              Get-ChildItem -Recurse -Filter '*.csproj' | ForEach-Object { dotnet build $_.FullName --configuration Release --no-restore }
-            }
+            Get-ChildItem -Recurse -Filter '*.csproj' | ForEach-Object { dotnet build $_.FullName --configuration Release --no-restore }
           }
 
       - name: Test
@@ -57,10 +48,5 @@ jobs:
           if ($sln) {
             dotnet test $sln --no-build --verbosity normal
           } else {
-            $slnx = Get-ChildItem -Path . -Filter '*.slnx' -Name -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($slnx) {
-              dotnet test $slnx --no-build --verbosity normal
-            } else {
-              Get-ChildItem -Recurse -Filter '*Tests.csproj' | ForEach-Object { dotnet test $_.FullName --no-build --verbosity normal }
-            }
+            Get-ChildItem -Recurse -Filter '*Tests.csproj' | ForEach-Object { dotnet test $_.FullName --no-build --verbosity normal }
           }
