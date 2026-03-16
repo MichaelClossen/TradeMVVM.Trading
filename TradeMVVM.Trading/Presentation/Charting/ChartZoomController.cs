@@ -128,26 +128,45 @@ namespace TradeMVVM.Trading.Chart
 
                 if (visiblePercents.Count == 0)
                 {
-                    _plot.Plot.Axes.AutoScale();
+                    // Only autoscale Y if the user hasn't set manual limits on this plot
+                    try
+                    {
+                        var manual = _plot.Tag as AxisManualLimits;
+                        if (manual == null || !manual.HasManualY)
+                            _plot.Plot.Axes.AutoScale();
+                    }
+                    catch
+                    {
+                        _plot.Plot.Axes.AutoScale();
+                    }
                 }
                 else
                 {
                     double yMin = visiblePercents.Min();
                     double yMax = visiblePercents.Max();
                     double range = yMax - yMin;
-                    if (range <= double.Epsilon)
+                    // Respect manual Y limits if present
+                    var manual = _plot.Tag as AxisManualLimits;
+                    if (manual != null && manual.HasManualY)
                     {
-                        yMin -= 1.0;
-                        yMax += 1.0;
+                        // do not modify Y axis
                     }
                     else
                     {
-                        double yPad = range * 0.1;
-                        yMin -= yPad;
-                        yMax += yPad;
-                    }
+                        if (range <= double.Epsilon)
+                        {
+                            yMin -= 1.0;
+                            yMax += 1.0;
+                        }
+                        else
+                        {
+                            double yPad = range * 0.1;
+                            yMin -= yPad;
+                            yMax += yPad;
+                        }
 
-                    _plot.Plot.Axes.SetLimitsY(yMin, yMax);
+                        _plot.Plot.Axes.SetLimitsY(yMin, yMax);
+                    }
                 }
             }
             else

@@ -9,6 +9,14 @@ using System.Globalization;
 
 namespace TradeMVVM.Trading.Chart
 {
+    // Marker class that can be attached to a WpfPlot.Tag to indicate user-set manual axis limits
+    internal class AxisManualLimits
+    {
+        public bool HasManualY { get; set; }
+        public double MinY { get; set; }
+        public double MaxY { get; set; }
+    }
+
     public class ChartManager
     {
         // When true, always use Scatter (explicit Xs) even for uniformly sampled data.
@@ -25,7 +33,7 @@ namespace TradeMVVM.Trading.Chart
         public Dictionary<string, object> SeriesByKey { get; private set; }
         public Dictionary<string, (double[] Xs, double[] Ys)> SeriesPoints => _seriesPoints;
 
-        public ChartManager(WpfPlot plot, string title)
+        public ChartManager(WpfPlot plot, string title, bool padYAxisForShortZoom = false)
         {
             _plot = plot;
             LineBrushes = new Dictionary<string, Brush>();
@@ -33,6 +41,7 @@ namespace TradeMVVM.Trading.Chart
             _seriesPoints = new Dictionary<string, (double[] Xs, double[] Ys)>();
             _lastData = null;
             _activeZoomSpan = null;
+            _padYAxisForShortZoom = padYAxisForShortZoom;
 
             ConfigureAxes();
         }
@@ -97,6 +106,8 @@ namespace TradeMVVM.Trading.Chart
         // remember last-rendered data so we can re-render with different visual settings when zoom changes
         private Dictionary<string, List<Tuple<DateTime, double>>> _lastData;
         private TimeSpan? _activeZoomSpan;
+        // if true, apply extra Y-axis padding when active zoom span is short (used for Knockouts)
+        private readonly bool _padYAxisForShortZoom;
 
         public void SetActiveZoom(TimeSpan? span)
         {
@@ -688,9 +699,68 @@ namespace TradeMVVM.Trading.Chart
                 _plot.Plot.Legend.FontColor = ScottPlot.Colors.White;
             }
 
-            // refresh WPF plot (this will auto-scale axes based on current plottables)
+            // If the plot has manual Y limits set by the user, respect them and skip auto adjustments
             try
             {
+                var manual = _plot.Tag as AxisManualLimits;
+                if (manual != null && manual.HasManualY)
+                {
+                    try { _plot.Plot.Axes.SetLimitsY(manual.MinY, manual.MaxY); } catch { }
+                    try { _plot.Refresh(); } catch { }
+                    return;
+                }
+            }
+            catch { }
+
+            // Attempt to nudge Y axis limits when a short active zoom span is set
+            // This helps e.g. the Knockouts chart in 1h view to have a more readable vertical spread.
+            try
+            {
+                if (_padYAxisForShortZoom && _activeZoomSpan.HasValue && _activeZoomSpan.Value <= TimeSpan.FromHours(1))
+                {
+                    try
+                    {
+                        // gather valid Y values across all series
+                        var allYs = new List<double>();
+                        foreach (var kv in _seriesPoints)
+                        {
+                            var arr = kv.Value;
+                            if (arr.Ys == null) continue;
+                            for (int i = 0; i < arr.Ys.Length; i++)
+                            {
+                                var v = arr.Ys[i];
+                                if (!double.IsNaN(v) && !double.IsInfinity(v))
+                                    allYs.Add(v);
+                            }
+                        }
+
+                        if (allYs.Count > 0)
+                        {
+                            // set Y axis exactly to the data min/max within the current interval
+                            double minY = allYs.Min();
+                            double maxY = allYs.Max();
+
+                            if (!double.IsNaN(minY) && !double.IsNaN(maxY))
+                            {
+                                if (Math.Abs(maxY - minY) < double.Epsilon)
+                                {
+                                    // avoid zero-span by adding a very small pad for single-value series
+                                    double tinyPad = Math.Max(1e-6, Math.Abs(maxY) * 1e-6);
+                                    _plot.Plot.Axes.SetLimitsY(minY - tinyPad, maxY + tinyPad);
+                                }
+                                else
+                                {
+                                    // apply a fixed 2 percentage-point padding (user request):
+                                    // yMax = maxData + 2, yMin = minData - 2
+                                    double padAbs = 2.0;
+                                    _plot.Plot.Axes.SetLimitsY(minY - padAbs, maxY + padAbs);
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
                 // Use Refresh instead of full reinitialization to reduce flicker
                 _plot.Refresh();
             }

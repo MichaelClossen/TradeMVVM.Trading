@@ -29,6 +29,13 @@ namespace TradeMVVM.Trading.Services
         public int PriceNanFailureThreshold { get; set; } = 5; // consecutive NaN prices before logging info
         // PL axis margin in EUR for charts (half-span)
         public double PlAxisMarginEur { get; set; } = 10.0;
+        // persisted manual Y axis limits for charts (0 means not set)
+        public double ChartsStocksYMin { get; set; } = 0.0;
+        public double ChartsStocksYMax { get; set; } = 0.0;
+        public double ChartsStocksTopYMin { get; set; } = 0.0;
+        public double ChartsStocksTopYMax { get; set; } = 0.0;
+        public double ChartsKnockoutsYMin { get; set; } = 0.0;
+        public double ChartsKnockoutsYMax { get; set; } = 0.0;
         // outlier detection threshold in percent (if price change > threshold -> treat as outlier)
         public double OutlierThresholdPercent { get; set; } = 50.0;
         // alert thresholds
@@ -83,6 +90,12 @@ namespace TradeMVVM.Trading.Services
                     UnresolvedIsinFailureThreshold = doc.UnresolvedIsinFailureThreshold != 0 ? doc.UnresolvedIsinFailureThreshold : UnresolvedIsinFailureThreshold;
                     PriceNanFailureThreshold = doc.PriceNanFailureThreshold != 0 ? doc.PriceNanFailureThreshold : PriceNanFailureThreshold;
                     PlAxisMarginEur = doc.PlAxisMarginEur != 0 ? doc.PlAxisMarginEur : PlAxisMarginEur;
+                    ChartsStocksYMin = doc.ChartsStocksYMin != 0 ? doc.ChartsStocksYMin : ChartsStocksYMin;
+                    ChartsStocksYMax = doc.ChartsStocksYMax != 0 ? doc.ChartsStocksYMax : ChartsStocksYMax;
+                    ChartsStocksTopYMin = doc.ChartsStocksTopYMin != 0 ? doc.ChartsStocksTopYMin : ChartsStocksTopYMin;
+                    ChartsStocksTopYMax = doc.ChartsStocksTopYMax != 0 ? doc.ChartsStocksTopYMax : ChartsStocksTopYMax;
+                    ChartsKnockoutsYMin = doc.ChartsKnockoutsYMin != 0 ? doc.ChartsKnockoutsYMin : ChartsKnockoutsYMin;
+                    ChartsKnockoutsYMax = doc.ChartsKnockoutsYMax != 0 ? doc.ChartsKnockoutsYMax : ChartsKnockoutsYMax;
                     OutlierThresholdPercent = doc.OutlierThresholdPercent != 0 ? doc.OutlierThresholdPercent : OutlierThresholdPercent;
                     AlertPricePercentThreshold = doc.AlertPricePercentThreshold > 0 ? doc.AlertPricePercentThreshold : AlertPricePercentThreshold;
                     AlertPlDeltaThresholdEur = doc.AlertPlDeltaThresholdEur > 0 ? doc.AlertPlDeltaThresholdEur : AlertPlDeltaThresholdEur;
@@ -143,6 +156,12 @@ namespace TradeMVVM.Trading.Services
                      ,IsinTrailingStopLastPlPercents = IsinTrailingStopLastPlPercents
                      ,IsinTrailingStopSetAtUtc = IsinTrailingStopSetAtUtc
                     ,IsinTrailingPeakPercents = IsinTrailingPeakPercents
+                    ,ChartsStocksYMin = ChartsStocksYMin
+                    ,ChartsStocksYMax = ChartsStocksYMax
+                    ,ChartsStocksTopYMin = ChartsStocksTopYMin
+                    ,ChartsStocksTopYMax = ChartsStocksTopYMax
+                    ,ChartsKnockoutsYMin = ChartsKnockoutsYMin
+                    ,ChartsKnockoutsYMax = ChartsKnockoutsYMax
                     ,EnableHoldingsSnapshotLogging = EnableHoldingsSnapshotLogging
                     ,MainWindowWidth = MainWindowWidth
                     ,MainWindowHeight = MainWindowHeight
@@ -179,6 +198,12 @@ namespace TradeMVVM.Trading.Services
                 public int UnresolvedIsinFailureThreshold { get; set; }
                 public int PriceNanFailureThreshold { get; set; }
             public double PlAxisMarginEur { get; set; }
+            public double ChartsStocksYMin { get; set; }
+            public double ChartsStocksYMax { get; set; }
+            public double ChartsStocksTopYMin { get; set; }
+            public double ChartsStocksTopYMax { get; set; }
+            public double ChartsKnockoutsYMin { get; set; }
+            public double ChartsKnockoutsYMax { get; set; }
             public double OutlierThresholdPercent { get; set; }
             public double AlertPricePercentThreshold { get; set; }
             public double AlertPlDeltaThresholdEur { get; set; }

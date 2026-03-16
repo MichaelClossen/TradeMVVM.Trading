@@ -20,12 +20,518 @@ namespace TradeMVVM.Trading.Views.Charts
 {
     public partial class ChartsView : UserControl
     {
+        // simple view-model for Alert-Center bindings
+        private class AlertCenterVm : System.ComponentModel.INotifyPropertyChanged
+        {
+            public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+            private void Raise(string n) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(n));
+
+            private string _processes = string.Empty; public string AlertStatusProcesses { get => _processes; set { _processes = value; Raise(nameof(AlertStatusProcesses)); } }
+            private string _stocks = string.Empty; public string AlertStatusStocks { get => _stocks; set { _stocks = value; Raise(nameof(AlertStatusStocks)); } }
+            private string _history = string.Empty; public string AlertStatusHistory { get => _history; set { _history = value; Raise(nameof(AlertStatusHistory)); } }
+            private string _time = string.Empty; public string AlertStatusTime { get => _time; set { _time = value; Raise(nameof(AlertStatusTime)); } }
+            private string _msg = string.Empty; public string AlertMessage { get => _msg; set { _msg = value; Raise(nameof(AlertMessage)); } }
+        }
+
+        private readonly AlertCenterVm _alertVm = new AlertCenterVm();
         private class AlertItem
         {
             public DateTime Timestamp { get; set; }
             public string Message { get; set; }
             public string Isin { get; set; }
             public string Display => $"[{Timestamp:dd.MM.yyyy HH:mm:ss.fff}] {Message}";
+        }
+
+        // Ensure persisted/manual Y-limits for the top PL plot do not exclude all loaded data.
+        private void EnsureTopPlotManualLimitsIncludeData(List<Tuple<DateTime, double>> compressed)
+        {
+            try
+            {
+                if (compressed == null || compressed.Count == 0) return;
+                var validYs = compressed.Select(t => t.Item2).Where(v => !double.IsNaN(v) && !double.IsInfinity(v)).ToArray();
+                if (validYs.Length == 0) return;
+
+                double dataMin = validYs.Min();
+                double dataMax = validYs.Max();
+
+                var manual = PlotStocksTop.Tag as TradeMVVM.Trading.Chart.AxisManualLimits;
+                var sett = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                if (manual == null || !manual.HasManualY) return;
+
+                double mMin = manual.MinY;
+                double mMax = manual.MaxY;
+                bool updated = false;
+
+                // if manual limits exclude data entirely, first try interpreting them as euros (divide by 1000)
+                if (mMin > dataMax || mMax < dataMin)
+                {
+                    double altMin = mMin / 1000.0;
+                    double altMax = mMax / 1000.0;
+                    if (!(altMin > dataMax || altMax < dataMin))
+                    {
+                        // conversion fixed the mismatch; apply converted limits
+                        mMin = altMin; mMax = altMax; updated = true;
+                    }
+                }
+
+                // if still excluding data, clamp to data bounds with a small pad
+                if (mMin > dataMax || mMax < dataMin)
+                {
+                    double pad = Math.Max(0.02 * Math.Abs(dataMax - dataMin), 0.2);
+                    mMin = dataMin - pad;
+                    mMax = dataMax + pad;
+                    updated = true;
+                }
+
+                if (updated)
+                {
+                    try { PlotStocksTop.Plot.Axes.SetLimitsY(mMin, mMax); } catch { }
+                    try { PlotStocksTop.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = mMin, MaxY = mMax }; } catch { }
+                    try
+                    {
+                        if (sett != null)
+                        {
+                            sett.ChartsStocksTopYMin = mMin; sett.ChartsStocksTopYMax = mMax; sett.Save();
+                        }
+                    }
+                    catch { }
+                    // update UI fields to reflect the corrected limits
+                    try { Dispatcher.BeginInvoke(new Action(() => RefreshYAxisTextBoxesForPlot(PlotStocksTop))); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        private void RefreshYAxisTextBoxesForPlot(ScottPlot.WPF.WpfPlot plot)
+        {
+            try
+            {
+                if (plot == null) return;
+                double min = double.NaN, max = double.NaN;
+                try { min = plot.Plot.Axes.Left.Min; } catch { }
+                try { max = plot.Plot.Axes.Left.Max; } catch { }
+
+                // If axes are not yet initialized, fall back to persisted settings values so
+                // the Ymin/Ymax textboxes show something useful at startup.
+                try
+                {
+                    if (double.IsNaN(min) || double.IsNaN(max))
+                    {
+                        var sett = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                        if (sett != null)
+                        {
+                            if (plot == PlotStocks)
+                            {
+                                if (double.IsNaN(min) && !double.IsNaN(sett.ChartsStocksYMin) && sett.ChartsStocksYMin != 0.0)
+                                    min = sett.ChartsStocksYMin;
+                                if (double.IsNaN(max) && !double.IsNaN(sett.ChartsStocksYMax) && sett.ChartsStocksYMax != 0.0)
+                                    max = sett.ChartsStocksYMax;
+                            }
+                            else if (plot == PlotStocksTop)
+                            {
+                                if (double.IsNaN(min) && !double.IsNaN(sett.ChartsStocksTopYMin) && sett.ChartsStocksTopYMin != 0.0)
+                                    min = sett.ChartsStocksTopYMin;
+                                if (double.IsNaN(max) && !double.IsNaN(sett.ChartsStocksTopYMax) && sett.ChartsStocksTopYMax != 0.0)
+                                    max = sett.ChartsStocksTopYMax;
+                            }
+                            else if (plot == PlotKnockouts)
+                            {
+                                if (double.IsNaN(min) && !double.IsNaN(sett.ChartsKnockoutsYMin) && sett.ChartsKnockoutsYMin != 0.0)
+                                    min = sett.ChartsKnockoutsYMin;
+                                if (double.IsNaN(max) && !double.IsNaN(sett.ChartsKnockoutsYMax) && sett.ChartsKnockoutsYMax != 0.0)
+                                    max = sett.ChartsKnockoutsYMax;
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                var culture = CultureInfo.GetCultureInfo("de-DE");
+                string sMin = double.IsNaN(min) ? string.Empty : string.Format(culture, "{0:0.##}", min);
+                string sMax = double.IsNaN(max) ? string.Empty : string.Format(culture, "{0:0.##}", max);
+
+                if (plot == PlotStocksTop)
+                {
+                    try
+                    {
+                        var tbMin = this.FindName("TxtStocksTopYMin") as TextBox;
+                        var tbMax = this.FindName("TxtStocksTopYMax") as TextBox;
+                        if (tbMin != null && string.IsNullOrWhiteSpace(tbMin.Text)) tbMin.Text = sMin;
+                        if (tbMax != null && string.IsNullOrWhiteSpace(tbMax.Text)) tbMax.Text = sMax;
+                    }
+                    catch { }
+                }
+                else if (plot == PlotStocks)
+                {
+                    try
+                    {
+                        var tbMin = this.FindName("TxtStocksYMin") as TextBox;
+                        var tbMax = this.FindName("TxtStocksYMax") as TextBox;
+                        if (tbMin != null && string.IsNullOrWhiteSpace(tbMin.Text)) tbMin.Text = sMin;
+                        if (tbMax != null && string.IsNullOrWhiteSpace(tbMax.Text)) tbMax.Text = sMax;
+                    }
+                    catch { }
+                }
+                else if (plot == PlotKnockouts)
+                {
+                    try
+                    {
+                        var tbMin = this.FindName("TxtKnockoutsYMin") as TextBox;
+                        var tbMax = this.FindName("TxtKnockoutsYMax") as TextBox;
+                        if (tbMin != null && string.IsNullOrWhiteSpace(tbMin.Text)) tbMin.Text = sMin;
+                        if (tbMax != null && string.IsNullOrWhiteSpace(tbMax.Text)) tbMax.Text = sMax;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        private void UpdateAllYAxisTextBoxes()
+        {
+            try
+            {
+                try { RefreshYAxisTextBoxesForPlot(PlotStocksTop); } catch { }
+                try { RefreshYAxisTextBoxesForPlot(PlotStocks); } catch { }
+                try { RefreshYAxisTextBoxesForPlot(PlotKnockouts); } catch { }
+            }
+            catch { }
+        }
+
+        private void ApplyYAxisFromInputs(ScottPlot.WPF.WpfPlot plot, string minText, string maxText)
+        {
+            try
+            {
+                if (plot == null) return;
+                double minVal = double.NaN, maxVal = double.NaN;
+                bool hasMin = false, hasMax = false;
+                // try German format first (comma), then invariant (dot)
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(minText))
+                    {
+                        hasMin = double.TryParse(minText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.GetCultureInfo("de-DE"), out minVal);
+                        if (!hasMin)
+                            hasMin = double.TryParse(minText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out minVal);
+                    }
+                    if (!string.IsNullOrWhiteSpace(maxText))
+                    {
+                        hasMax = double.TryParse(maxText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.GetCultureInfo("de-DE"), out maxVal);
+                        if (!hasMax)
+                            hasMax = double.TryParse(maxText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out maxVal);
+                    }
+                }
+                catch { hasMin = false; hasMax = false; }
+
+                if (hasMin && hasMax)
+                {
+                    try
+                    {
+                        // ensure min <= max; swap if user entered inverted values
+                        if (minVal > maxVal)
+                        {
+                            var tmp = minVal; minVal = maxVal; maxVal = tmp;
+                        }
+
+                        // protect against equal values by adding a tiny pad
+                        if (Math.Abs(maxVal - minVal) < 1e-12)
+                        {
+                            double p = Math.Max(1e-6, Math.Abs(maxVal) * 1e-6);
+                            minVal -= p; maxVal += p;
+                        }
+
+                        plot.Plot.Axes.SetLimitsY(minVal, maxVal);
+                        // remember manual limits in plot.Tag so ChartManager respects them on re-render
+                        plot.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = minVal, MaxY = maxVal };
+                        plot.Refresh();
+                        try { var tb = this.FindName("TxtAlertStatusLine") as System.Windows.Controls.TextBlock; if (tb != null) tb.Text = $"Y-Axis gesetzt: {minVal:0.##} .. {maxVal:0.##}"; } catch { }
+                        try { Dispatcher.BeginInvoke(new Action(() => RefreshYAxisTextBoxesForPlot(plot))); } catch { }
+
+                        // persist limits to settings service
+                        try
+                        {
+                            var sett = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                            if (sett != null)
+                            {
+                                if (plot == PlotStocks)
+                                {
+                                    sett.ChartsStocksYMin = minVal; sett.ChartsStocksYMax = maxVal; sett.Save();
+                                }
+                                else if (plot == PlotStocksTop)
+                                {
+                                    sett.ChartsStocksTopYMin = minVal; sett.ChartsStocksTopYMax = maxVal; sett.Save();
+                                    // reload top-plot history for the current visible X-range so data is displayed immediately
+                                    try { LoadTopPlotHistoryForVisibleRange(); } catch { }
+                                    // ensure user's limits do not exclude all available data: clamp/expand to include data if necessary
+                                    try
+                                    {
+                                        List<Tuple<DateTime, double>> listCopy = null;
+                                        lock (_stockTopData)
+                                        {
+                                            if (_stockTopData.TryGetValue("zero", out var l) && l != null && l.Count > 0)
+                                                listCopy = new List<Tuple<DateTime, double>>(l);
+                                        }
+
+                                        if (listCopy != null && listCopy.Count > 0)
+                                        {
+                                            var validYs = listCopy.Select(t => t.Item2).Where(v => !double.IsNaN(v) && !double.IsInfinity(v)).ToArray();
+                                            if (validYs.Length > 0)
+                                            {
+                                                double dataMin = validYs.Min();
+                                                double dataMax = validYs.Max();
+                                                // if user's limits would hide all data, expand them to include data plus small pad
+                                                if (minVal > dataMax || maxVal < dataMin)
+                                                {
+                                                    // expand to data bounds with small pad (2% or 0.2 k€)
+                                                    double span = Math.Abs(dataMax - dataMin);
+                                                    double pad = Math.Max(0.02 * span, 0.2);
+                                                    minVal = dataMin - pad;
+                                                    maxVal = dataMax + pad;
+                                                    try { plot.Plot.Axes.SetLimitsY(minVal, maxVal); plot.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = minVal, MaxY = maxVal }; } catch { }
+                                                    // update persisted values
+                                                    try { sett.ChartsStocksTopYMin = minVal; sett.ChartsStocksTopYMax = maxVal; sett.Save(); } catch { }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+
+                                    try { _stockTopChartManager.Render(_stockTopData); } catch { }
+                                    try { PlotStocksTop.Refresh(); } catch { }
+                                    try { RefreshYAxisTextBoxesForPlot(plot); } catch { }
+                                }
+                                else if (plot == PlotKnockouts)
+                                {
+                                    sett.ChartsKnockoutsYMin = minVal; sett.ChartsKnockoutsYMax = maxVal; sett.Save();
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    catch { }
+                }
+                else if (hasMin && !hasMax)
+                {
+                    try
+                    {
+                        var curMax = plot.Plot.Axes.Left.Max;
+                        if (!double.IsNaN(curMax))
+                        {
+                            plot.Plot.Axes.SetLimitsY(minVal, curMax);
+                            plot.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = minVal, MaxY = curMax };
+                        }
+                        plot.Refresh();
+                        try { var tb = this.FindName("TxtAlertStatusLine") as System.Windows.Controls.TextBlock; if (tb != null) tb.Text = $"Y-Axis gesetzt: min={minVal:0.##}"; } catch { }
+                        try { Dispatcher.BeginInvoke(new Action(() => RefreshYAxisTextBoxesForPlot(plot))); } catch { }
+                    }
+                    catch { }
+                }
+                else if (!hasMin && hasMax)
+                {
+                    try
+                    {
+                        var curMin = plot.Plot.Axes.Left.Min;
+                        if (!double.IsNaN(curMin))
+                        {
+                            plot.Plot.Axes.SetLimitsY(curMin, maxVal);
+                            plot.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = curMin, MaxY = maxVal };
+                        }
+                        plot.Refresh();
+                        try { var tb = this.FindName("TxtAlertStatusLine") as System.Windows.Controls.TextBlock; if (tb != null) tb.Text = $"Y-Axis gesetzt: max={maxVal:0.##}"; } catch { }
+                        try { Dispatcher.BeginInvoke(new Action(() => RefreshYAxisTextBoxesForPlot(plot))); } catch { }
+                    }
+                    catch { }
+                }
+                else
+                {
+                    try { var tb = this.FindName("TxtAlertStatusLine") as System.Windows.Controls.TextBlock; if (tb != null) tb.Text = "Y-Axis: ungültige Eingabe"; } catch { }
+                }
+            }
+            catch { }
+        }
+
+        private void AutoScaleYAxis(ScottPlot.WPF.WpfPlot plot)
+        {
+            try
+            {
+                if (plot == null) return;
+                // clear manual limits marker and let ChartManager autoscale on next render
+                try {
+                    plot.Tag = null; plot.Plot.Axes.SetLimitsY(double.NaN, double.NaN);
+                    // clear persisted setting
+                    var sett = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                    if (sett != null)
+                    {
+                        if (plot == PlotStocks) { sett.ChartsStocksYMin = 0.0; sett.ChartsStocksYMax = 0.0; }
+                        else if (plot == PlotStocksTop) { sett.ChartsStocksTopYMin = 0.0; sett.ChartsStocksTopYMax = 0.0; }
+                        else if (plot == PlotKnockouts) { sett.ChartsKnockoutsYMin = 0.0; sett.ChartsKnockoutsYMax = 0.0; }
+                        sett.Save();
+                    }
+                    // when clearing manual limits on top plot, also reload data to ensure it is visible
+                    try
+                    {
+                        if (plot == PlotStocksTop)
+                        {
+                            LoadTopPlotHistoryForVisibleRange();
+                            try { _stockTopChartManager.Render(_stockTopData); } catch { }
+                            try { PlotStocksTop.Refresh(); } catch { }
+                        }
+                    }
+                    catch { }
+                    plot.Refresh();
+                } catch { }
+            }
+            catch { }
+        }
+
+        // XAML Click handlers
+        private void BtnStocksTopApply_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                try { Trace.WriteLine("BtnStocksTopApply_Click invoked"); } catch { }
+                try { var tb = this.FindName("TxtAlertStatusLine") as System.Windows.Controls.TextBlock; if (tb != null) tb.Text = "Apply Top Y-Axis..."; } catch { }
+                var tmin = (this.FindName("TxtStocksTopYMin") as TextBox)?.Text ?? string.Empty;
+                var tmax = (this.FindName("TxtStocksTopYMax") as TextBox)?.Text ?? string.Empty;
+                ApplyYAxisFromInputs(PlotStocksTop, tmin, tmax);
+            }
+            catch { }
+        }
+
+        private void BtnStocksTopAuto_Click(object sender, RoutedEventArgs e)
+        {
+            try { Trace.WriteLine("BtnStocksTopAuto_Click invoked"); AutoScaleYAxis(PlotStocksTop); } catch { }
+        }
+
+        private void BtnStocksApply_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                try { Trace.WriteLine("BtnStocksApply_Click invoked"); } catch { }
+                var tmin = (this.FindName("TxtStocksYMin") as TextBox)?.Text ?? string.Empty;
+                var tmax = (this.FindName("TxtStocksYMax") as TextBox)?.Text ?? string.Empty;
+                ApplyYAxisFromInputs(PlotStocks, tmin, tmax);
+            }
+            catch { }
+        }
+
+        private void BtnStocksAuto_Click(object sender, RoutedEventArgs e)
+        {
+            try { Trace.WriteLine("BtnStocksAuto_Click invoked"); AutoScaleYAxis(PlotStocks); } catch { }
+        }
+
+        private void BtnKnockoutsApply_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                try { Trace.WriteLine("BtnKnockoutsApply_Click invoked"); } catch { }
+                var tmin = (this.FindName("TxtKnockoutsYMin") as TextBox)?.Text ?? string.Empty;
+                var tmax = (this.FindName("TxtKnockoutsYMax") as TextBox)?.Text ?? string.Empty;
+                ApplyYAxisFromInputs(PlotKnockouts, tmin, tmax);
+            }
+            catch { }
+        }
+
+        private void BtnKnockoutsAuto_Click(object sender, RoutedEventArgs e)
+        {
+            try { Trace.WriteLine("BtnKnockoutsAuto_Click invoked"); AutoScaleYAxis(PlotKnockouts); } catch { }
+        }
+
+        // Try to locate the previous business day's TotalPL value from a full history list.
+        // Returns true when a previous value was found.
+        private bool TryGetPreviousBusinessDayValue(List<Tuple<DateTime, double>> hist, DateTime lastTime, out DateTime prevTime, out double prevValue)
+        {
+            prevTime = DateTime.MinValue;
+            prevValue = 0.0;
+            try
+            {
+                if (hist == null || hist.Count == 0)
+                    return false;
+
+                // Work in UTC date space to avoid timezone mismatches
+                var lastUtc = lastTime.Kind == DateTimeKind.Utc ? lastTime : lastTime.ToUniversalTime();
+                var target = lastUtc.Date.AddDays(-1);
+                while (target.DayOfWeek == DayOfWeek.Saturday || target.DayOfWeek == DayOfWeek.Sunday)
+                    target = target.AddDays(-1);
+
+                // prefer the last measurement on the previous business day (UTC)
+                var exact = hist
+                    .Where(t => t.Item1.ToUniversalTime().Date == target)
+                    .OrderByDescending(t => t.Item1)
+                    .ToList();
+                if (exact.Count > 0)
+                {
+                    var pick = exact[0];
+                    prevTime = pick.Item1;
+                    prevValue = pick.Item2;
+                    return true;
+                }
+
+                // fallback: take the latest entry up to the end of that previous business day
+                var endOfTargetUtc = target.AddDays(1);
+                var beforeEnd = hist
+                    .Where(t => t.Item1.ToUniversalTime() < endOfTargetUtc)
+                    .OrderByDescending(t => t.Item1)
+                    .FirstOrDefault();
+                if (beforeEnd != null)
+                {
+                    prevTime = beforeEnd.Item1;
+                    prevValue = beforeEnd.Item2;
+                    return true;
+                }
+
+                // final fallback: nearest earlier entry before the provided lastTime
+                var earlier = hist.Where(t => t.Item1 < lastTime).OrderByDescending(t => t.Item1).FirstOrDefault();
+                if (earlier != null)
+                {
+                    prevTime = earlier.Item1;
+                    prevValue = earlier.Item2;
+                    return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private void UpdateHoldingsCsvPathDisplay()
+        {
+            try
+            {
+                var settings = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                string path = settings?.HoldingsCsvPath;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    try
+                    {
+                        var tbNull = this.FindName("TxtHoldingsCsvPath") as System.Windows.Controls.TextBlock;
+                        if (tbNull != null) tbNull.Text = "(nicht konfiguriert)";
+                    }
+                    catch { }
+                    return;
+                }
+
+                string display;
+                try
+                {
+                    if (File.Exists(path))
+                        display = System.IO.Path.GetFullPath(path);
+                    else
+                        display = $"Nicht gefunden: {path}";
+                }
+                catch
+                {
+                    display = path;
+                }
+
+                try
+                {
+                    var tb = this.FindName("TxtHoldingsCsvPath") as System.Windows.Controls.TextBlock;
+                    if (tb != null) tb.Text = display;
+                }
+                catch { }
+            }
+            catch { }
         }
 
         // Load persisted TotalPLHistory data for the currently visible X range and populate _stockTopData
@@ -58,14 +564,15 @@ namespace TradeMVVM.Trading.Views.Charts
                 {
                     var db = new DatabaseService();
                     var hist = db.LoadTotalPLHistoryBetween(visMin.Value, visMax.Value);
+                    try { Trace.WriteLine($"LoadTopPlotHistoryForVisibleRange: loaded {hist?.Count ?? 0} points between {visMin.Value:O} and {visMax.Value:O}"); } catch { }
                     if (hist != null && hist.Count > 0)
                     {
                         var inRange = hist.Where(t => t.Item1 >= visMin.Value && t.Item1 <= visMax.Value).OrderBy(t => t.Item1).ToList();
                         var compressed = new List<Tuple<DateTime, double>>();
 
                         // For short visible spans prefer to keep all DB samples (avoid aggressive compression)
-                        var span = visMax.Value - visMin.Value;
-                        bool keepAll = span <= TimeSpan.FromHours(1);
+                        var visSpan = visMax.Value - visMin.Value;
+                        bool keepAll = visSpan <= TimeSpan.FromHours(1);
 
                         double? lastVal = null;
                         foreach (var pt in inRange)
@@ -84,6 +591,40 @@ namespace TradeMVVM.Trading.Views.Charts
                                 _stockTopData["zero"] = compressed;
                             }
                             try { _stockTopChartManager.Render(_stockTopData); } catch { }
+                            try { EnsureTopPlotManualLimitsIncludeData(compressed); } catch { }
+                                try
+                                {
+                                    // enforce X axis to the requested visible range so the data is visible immediately
+                                    var minOa = visMin.Value.ToOADate();
+                                    var maxOa = visMax.Value.ToOADate();
+                                    if (!double.IsNaN(minOa) && !double.IsNaN(maxOa) && maxOa > minOa)
+                                    {
+                                        try { PlotStocksTop.Plot.Axes.SetLimitsX(minOa, maxOa); } catch { }
+                                        try { _plLastXMin = minOa; _plLastXMax = maxOa; } catch { }
+                                    }
+
+                                    // If the lower stocks plot has not initialized X axis yet, fall back to using the loaded data bounds
+                                    try
+                                    {
+                                        var lowerMin = PlotStocks.Plot.Axes.Bottom.Min;
+                                        var lowerMax = PlotStocks.Plot.Axes.Bottom.Max;
+                                        if (double.IsNaN(lowerMin) || double.IsNaN(lowerMax) || lowerMax <= lowerMin)
+                                        {
+                                            // derive bounds from compressed data
+                                            var xs = compressed.Select(t => t.Item1.ToOADate()).ToArray();
+                                            if (xs.Length > 1)
+                                            {
+                                                var dmin = xs.Min();
+                                                var dmax = xs.Max();
+                                                try { PlotStocksTop.Plot.Axes.SetLimitsX(dmin, dmax); } catch { }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                                catch { }
+                                try { PlotStocksTop.Refresh(); } catch { }
+                            try { Trace.WriteLine($"LoadTopPlotHistoryForVisibleRange: populated _stockTopData[zero] with {compressed.Count} samples"); } catch { }
                             try
                             {
                                 // enforce X axis to the requested visible range so the data is visible immediately
@@ -303,6 +844,7 @@ namespace TradeMVVM.Trading.Views.Charts
         public ChartsView()
         {
             InitializeComponent();
+            this.DataContext = _alertVm;
             try { UpdatePlTitle(); } catch { }
 
             try
@@ -310,6 +852,8 @@ namespace TradeMVVM.Trading.Views.Charts
                 _settingsService = App.Services?.GetService(typeof(SettingsService)) as SettingsService;
             }
             catch { }
+
+            try { UpdateHoldingsCsvPathDisplay(); } catch { }
 
             try { ApplySavedLayout(); } catch { }
             try
@@ -371,16 +915,61 @@ namespace TradeMVVM.Trading.Views.Charts
                 try { SaveTrailingPeaks(force: true); } catch { }
             };
 
+            // Y-axis controls are handled via XAML Click handlers defined below
+            // wire up button events declared in XAML
+            try
+            {
+                var b1 = this.FindName("BtnStocksTopApply") as Button;
+                var b2 = this.FindName("BtnStocksTopAuto") as Button;
+                var b3 = this.FindName("BtnStocksApply") as Button;
+                var b4 = this.FindName("BtnStocksAuto") as Button;
+                var b5 = this.FindName("BtnKnockoutsApply") as Button;
+                var b6 = this.FindName("BtnKnockoutsAuto") as Button;
+
+                if (b1 != null) b1.Click += BtnStocksTopApply_Click;
+                if (b2 != null) b2.Click += BtnStocksTopAuto_Click;
+                if (b3 != null) b3.Click += BtnStocksApply_Click;
+                if (b4 != null) b4.Click += BtnStocksAuto_Click;
+                if (b5 != null) b5.Click += BtnKnockoutsApply_Click;
+                if (b6 != null) b6.Click += BtnKnockoutsAuto_Click;
+            }
+            catch { }
+
             _stockChartManager = new ChartManager(PlotStocks, "Aktien / ETFs");
             try { _stockChartManager.ForceScatter = true; } catch { }
             _stockTopChartManager = new ChartManager(PlotStocksTop, "Aktien / ETFs (Top)");
             try { _stockTopChartManager.ForceScatter = true; } catch { }
-            _knockoutChartManager = new ChartManager(PlotKnockouts, "Knockouts");
+            _knockoutChartManager = new ChartManager(PlotKnockouts, "Knockouts", padYAxisForShortZoom: true);
             try { _knockoutChartManager.ForceScatter = true; } catch { }
             try
             {
                 // For the top stocks plot use k€ as left axis label (values are plotted in thousands)
                 PlotStocksTop.Plot.Axes.Left.Label.Text = "k€";
+            }
+            catch { }
+
+            // apply persisted manual axis limits from settings
+            try
+            {
+                var sett = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                if (sett != null)
+                {
+                    if (!double.IsNaN(sett.ChartsStocksYMin) && !double.IsNaN(sett.ChartsStocksYMax) && sett.ChartsStocksYMin != 0.0 && sett.ChartsStocksYMax != 0.0)
+                    {
+                        try { PlotStocks.Plot.Axes.SetLimitsY(sett.ChartsStocksYMin, sett.ChartsStocksYMax); PlotStocks.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = sett.ChartsStocksYMin, MaxY = sett.ChartsStocksYMax }; } catch { }
+                    }
+                    if (!double.IsNaN(sett.ChartsStocksTopYMin) && !double.IsNaN(sett.ChartsStocksTopYMax) && sett.ChartsStocksTopYMin != 0.0 && sett.ChartsStocksTopYMax != 0.0)
+                    {
+                        try { PlotStocksTop.Plot.Axes.SetLimitsY(sett.ChartsStocksTopYMin, sett.ChartsStocksTopYMax); PlotStocksTop.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = sett.ChartsStocksTopYMin, MaxY = sett.ChartsStocksTopYMax }; } catch { }
+                    }
+                    if (!double.IsNaN(sett.ChartsKnockoutsYMin) && !double.IsNaN(sett.ChartsKnockoutsYMax) && sett.ChartsKnockoutsYMin != 0.0 && sett.ChartsKnockoutsYMax != 0.0)
+                    {
+                        try { PlotKnockouts.Plot.Axes.SetLimitsY(sett.ChartsKnockoutsYMin, sett.ChartsKnockoutsYMax); PlotKnockouts.Tag = new TradeMVVM.Trading.Chart.AxisManualLimits { HasManualY = true, MinY = sett.ChartsKnockoutsYMin, MaxY = sett.ChartsKnockoutsYMax }; } catch { }
+                    }
+
+                    // refresh UI text boxes to show current axis limits (including persisted ones)
+                    try { UpdateAllYAxisTextBoxes(); } catch { }
+                }
             }
             catch { }
 
@@ -481,20 +1070,20 @@ namespace TradeMVVM.Trading.Views.Charts
                             {
                                 if (visMin.HasValue && visMax.HasValue)
                                 {
-                                    var span = visMax.Value - visMin.Value;
-                                if (span <= TimeSpan.FromMinutes(1))
+                                    var visSpanTop = visMax.Value - visMin.Value;
+                                if (visSpanTop <= TimeSpan.FromMinutes(1))
                                 {
                                     // very small span: update often
                                     try { _topPlotTimer.Interval = TimeSpan.FromSeconds(2); } catch { }
                                     // force explicit Xs so short-range high-frequency samples are not decimated
                                     try { _stockTopChartManager.ForceScatter = true; } catch { }
                                 }
-                                else if (span <= TimeSpan.FromMinutes(5))
+                                else if (visSpanTop <= TimeSpan.FromMinutes(5))
                                 {
                                     try { _topPlotTimer.Interval = TimeSpan.FromSeconds(5); } catch { }
                                     try { _stockTopChartManager.ForceScatter = true; } catch { }
                                 }
-                                else if (span <= TimeSpan.FromHours(1))
+                                else if (visSpanTop <= TimeSpan.FromHours(1))
                                 {
                                     // for up to 1 hour visible span keep explicit points so the top plot shows available DB samples
                                     try { _topPlotTimer.Interval = TimeSpan.FromSeconds(30); } catch { }
@@ -609,15 +1198,48 @@ namespace TradeMVVM.Trading.Views.Charts
 
                                     if (!double.IsNaN(minY) && !double.IsNaN(maxY))
                                     {
-                                        if (Math.Abs(maxY - minY) < double.Epsilon)
+                                        try
                                         {
-                                            var pad = Math.Max(0.5, Math.Abs(maxY) * 0.05);
-                                            PlotStocksTop.Plot.Axes.SetLimitsY(minY - pad, maxY + pad);
+                                            // respect user-configured PL axis half-span (in EUR) from settings
+                                            double marginHalfK = double.NaN;
+                                            try
+                                            {
+                                                var sett = _settingsService ?? (App.Services?.GetService(typeof(SettingsService)) as SettingsService);
+                                                if (sett != null && !double.IsNaN(sett.PlAxisMarginEur) && !double.IsInfinity(sett.PlAxisMarginEur) && sett.PlAxisMarginEur > 0)
+                                                    marginHalfK = sett.PlAxisMarginEur / 1000.0; // convert € -> k€
+                                            }
+                                            catch { }
+
+                                            if (Math.Abs(maxY - minY) < double.Epsilon)
+                                            {
+                                                // single-value series: choose a sensible pad and also respect configured half-span
+                                                var pad = Math.Max(0.5, Math.Abs(maxY) * 0.05);
+                                                if (!double.IsNaN(marginHalfK)) pad = Math.Max(pad, marginHalfK);
+                                                PlotStocksTop.Plot.Axes.SetLimitsY(minY - pad, maxY + pad);
+                                            }
+                                            else
+                                            {
+                                                // ensure the visible half-span is at least the configured value
+                                                if (!double.IsNaN(marginHalfK))
+                                                {
+                                                    var currentHalf = (maxY - minY) / 2.0;
+                                                    if (currentHalf < marginHalfK)
+                                                    {
+                                                        var center = (maxY + minY) / 2.0;
+                                                        PlotStocksTop.Plot.Axes.SetLimitsY(center - marginHalfK, center + marginHalfK);
+                                                    }
+                                                    else
+                                                    {
+                                                        PlotStocksTop.Plot.Axes.SetLimitsY(minY, maxY);
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    PlotStocksTop.Plot.Axes.SetLimitsY(minY, maxY);
+                                                }
+                                            }
                                         }
-                                        else
-                                        {
-                                            PlotStocksTop.Plot.Axes.SetLimitsY(minY, maxY);
-                                        }
+                                        catch { }
                                     }
                                 }
                                 catch { }
@@ -719,7 +1341,7 @@ namespace TradeMVVM.Trading.Views.Charts
                         {
                             var settings = App.Services?.GetService(typeof(TradeMVVM.Trading.Services.SettingsService)) as TradeMVVM.Trading.Services.SettingsService;
                             if (settings != null)
-                                settings.SettingsChanged += () => Dispatcher.Invoke(() => { try { ComputeTotalPlFromDb(); } catch { } });
+                                settings.SettingsChanged += () => Dispatcher.Invoke(() => { try { ComputeTotalPlFromDb(); } catch { } try { UpdateHoldingsCsvPathDisplay(); } catch { } });
                         }
                         catch { }
 
@@ -798,13 +1420,71 @@ namespace TradeMVVM.Trading.Views.Charts
                         {
                             var db = new DatabaseService();
                             var hist = db.LoadTotalPLHistory();
+                            try { Trace.WriteLine($"MirrorTimer: LoadTotalPLHistory returned {hist?.Count ?? 0} rows"); } catch { }
                             if (hist != null && hist.Count > 0)
                             {
                                 var lastItem = hist[hist.Count - 1];
                                 var last = lastItem.Item2; // value in €
                                 var lastTime = lastItem.Item1;
-                                TxtTotalPLTop.Text = string.Format(CultureInfo.GetCultureInfo("de-DE"), "{0:0.00} €", last);
+                                try { Trace.WriteLine($"MirrorTimer: lastTime={lastTime:O}, last={last}"); } catch { }
+                                var culture = CultureInfo.GetCultureInfo("de-DE");
+                                TxtTotalPLTop.Text = string.Format(culture, "{0:0.00} €", last);
                                 TxtTotalPLTop.Foreground = last >= 0 ? PositivePlBrush : NegativePlBrush;
+
+                                // compute delta vs previous business day and vs start of current day (if available)
+                                try
+                                {
+                                    // show two separate TextBlocks: start-of-day delta and previous-day delta
+                                    try
+                                    {
+                                        var tbStart = this.FindName("TxtTotalPLTopDeltaStart") as System.Windows.Controls.TextBlock;
+                                        var tbPrev = this.FindName("TxtTotalPLTopDeltaPrev") as System.Windows.Controls.TextBlock;
+
+                                        // start of day delta
+                                        try
+                                        {
+                                            var startEntry = hist.Where(t => t.Item1.Date == lastTime.Date).OrderBy(t => t.Item1).FirstOrDefault();
+                                            if (startEntry != null)
+                                            {
+                                                var startVal = startEntry.Item2;
+                                                var deltaStart = last - startVal;
+                                                double pctStart = double.NaN;
+                                                if (Math.Abs(startVal) > 1e-12)
+                                                    pctStart = (deltaStart / Math.Abs(startVal)) * 100.0;
+                                                var txtStart = string.Format(culture, "Δ seit Tagesbeginn: {0:+0.00;-0.00;0.00} €", deltaStart);
+                                                var pctTxtStart = double.IsNaN(pctStart) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctStart);
+                                                if (tbStart != null) { tbStart.Text = txtStart + pctTxtStart; tbStart.Foreground = deltaStart >= 0 ? PositivePlBrush : NegativePlBrush; }
+                                            }
+                                            else
+                                            {
+                                                if (tbStart != null) tbStart.Text = string.Empty;
+                                            }
+                                        }
+                                        catch { if (tbStart != null) tbStart.Text = string.Empty; }
+
+                                        // previous business day delta
+                                        try
+                                        {
+                                            if (TryGetPreviousBusinessDayValue(hist, lastTime, out var prevTime, out var prevValue))
+                                            {
+                                                var deltaPrev = last - prevValue;
+                                                double pctPrev = double.NaN;
+                                                if (Math.Abs(prevValue) > 1e-12)
+                                                    pctPrev = (deltaPrev / Math.Abs(prevValue)) * 100.0;
+                                                var txtPrev = string.Format(culture, "Δ zum {0:dd.MM.yyyy}: {1:+0.00;-0.00;0.00} €", prevTime, deltaPrev);
+                                                var pctTxtPrev = double.IsNaN(pctPrev) ? string.Empty : string.Format(culture, " ({0:+0.##;-0.##;0.##}%)", pctPrev);
+                                                if (tbPrev != null) { tbPrev.Text = txtPrev + pctTxtPrev; tbPrev.Foreground = deltaPrev >= 0 ? PositivePlBrush : NegativePlBrush; }
+                                            }
+                                            else
+                                            {
+                                                if (tbPrev != null) tbPrev.Text = string.Empty;
+                                            }
+                                        }
+                                        catch { if (tbPrev != null) tbPrev.Text = string.Empty; }
+                                    }
+                                    catch { }
+                                }
+                                catch { }
 
                                 // ensure the top-plot series contains the latest DB point so the graph shows
                                 // the most recent value immediately (do not wait for the slower topPlotTimer)
@@ -816,12 +1496,12 @@ namespace TradeMVVM.Trading.Views.Charts
                                     {
                                         if (!_stockTopData.TryGetValue("zero", out var list) || list == null)
                                             list = new List<Tuple<DateTime, double>>();
-
                                         // append if newer than last stored point to avoid duplicates
                                         if (list.Count == 0 || list[list.Count - 1].Item1 < lastTime)
                                         {
                                             list.Add(new Tuple<DateTime, double>(lastTime, displayVal));
                                             _stockTopData["zero"] = list;
+                                            try { Trace.WriteLine($"MirrorTimer: appended point {lastTime:O} -> {displayVal} k€ (list now {list.Count})"); } catch { }
                                         }
                                     }
                                     try { _stockTopChartManager.Render(_stockTopData); } catch { }
@@ -852,6 +1532,24 @@ namespace TradeMVVM.Trading.Views.Charts
 
             // start runtime status timer
             StartStatusTimer();
+
+            // populate status once immediately so Alert-Center shows values right away
+            try { UpdateStatus(); } catch { }
+
+            // ensure Y axis textboxes reflect current axes once the visual tree/layout is ready
+            try
+            {
+                this.Loaded += (s, e) =>
+                {
+                    try
+                    {
+                        // defer so ScottPlot axes/layout initialize first
+                        Dispatcher.BeginInvoke(new Action(() => { try { UpdateAllYAxisTextBoxes(); } catch { } }), System.Windows.Threading.DispatcherPriority.Background);
+                    }
+                    catch { }
+                };
+            }
+            catch { }
         }
 
         private void TrySetAxisMinimumSize(object axis, float size)
@@ -1044,103 +1742,38 @@ namespace TradeMVVM.Trading.Views.Charts
         /// <summary>
         /// Total PL im Diagramm kann als unrealisiert oder unrealisiert+realisiert angezeigt werden.
         /// </summary>
+        // Read total P/L exclusively from DB. GUI must not compute it locally.
         private void ComputeTotalPlFromDb()
         {
             try
             {
-                var mainVm = TradeMVVM.Trading.App.MainViewModelInstance
-                    ?? Application.Current?.MainWindow?.DataContext as TradeMVVM.Trading.Presentation.ViewModels.MainViewModel;
-                if (mainVm?.HoldingsReport == null) return;
-
-                var rows = mainVm.HoldingsReport.Holdings
-                    .Where(r => r != null && !r.IsTotal)
-                    .ToList();
-                var isPollingRunning = mainVm.IsPollingRunning;
-
-                double sumTotalPlEur = 0.0;
-
-                if (_plDisplayMode == PlDisplayMode.UnrealizedPlusRealized)
-                {
-                    // Use source holdings (CSV-basis, inkl. bereits geschlossener Positionen)
-                    // so the value matches the expected overall profit.
-                    var converter = new CurrencyConverter();
-                    var source = mainVm.HoldingsReport.GetSourceHoldings();
-
-                    if (source != null && source.Count > 0)
-                    {
-                        foreach (var h in source)
-                        {
-                            try
-                            {
-                                var avgBuy = h.RemainingBoughtShares > 0
-                                    ? h.RemainingBoughtAmount / h.RemainingBoughtShares
-                                    : double.NaN;
-
-                                var realized = double.IsNaN(h.RealizedPL) || double.IsInfinity(h.RealizedPL)
-                                    ? 0.0
-                                    : h.RealizedPL;
-
-                                var unrealized = (!double.IsNaN(avgBuy) && !double.IsNaN(h.LastPrice) && !double.IsInfinity(h.LastPrice))
-                                    ? h.Shares * (h.LastPrice - avgBuy)
-                                    : 0.0;
-
-                                var totalNative = realized + unrealized;
-                                sumTotalPlEur += converter.ConvertToEur(totalNative, h.Currency);
-                            }
-                            catch { }
-                        }
-
-                        // include income cashflows (Zinsen/Dividenden/Coupons) from CSV
-                        sumTotalPlEur += GetIncomeFromCsvEur();
-                    }
-                    else
-                    {
-                        // fallback
-                        var reportTotal = mainVm.HoldingsReport.TotalPL;
-                        if (!double.IsNaN(reportTotal) && !double.IsInfinity(reportTotal))
-                            sumTotalPlEur = reportTotal;
-                    }
-                }
-                else
-                {
-                    var converter = new CurrencyConverter();
-                    foreach (var r in rows)
-                    {
-                        try
-                        {
-                            double unrealizedEur;
-                            if (!double.IsNaN(r.PLAmount) && !double.IsInfinity(r.PLAmount))
-                            {
-                                unrealizedEur = r.PLAmount;
-                            }
-                            else
-                            {
-                                var unrealizedNative = double.IsNaN(r.UnrealizedPL) || double.IsInfinity(r.UnrealizedPL) ? 0.0 : r.UnrealizedPL;
-                                unrealizedEur = converter.ConvertToEur(unrealizedNative, r.Currency);
-                            }
-
-                            sumTotalPlEur += unrealizedEur;
-                        }
-                        catch { }
-                    }
-                }
-
-                if (double.IsNaN(sumTotalPlEur) || double.IsInfinity(sumTotalPlEur))
+                var db = new DatabaseService();
+                var hist = db.LoadTotalPLHistory();
+                if (hist == null || hist.Count == 0)
                     return;
+
+                var lastItem = hist[hist.Count - 1];
+                var last = lastItem.Item2; // value in EUR
 
                 Action updateUi = () =>
                 {
-                    TxtTotalPL.Text = string.Format(System.Globalization.CultureInfo.GetCultureInfo("de-DE"), "{0:0.00} €", sumTotalPlEur);
-                    TxtTotalPL.Foreground = sumTotalPlEur >= 0 ? PositivePlBrush : NegativePlBrush;
-                    // also update the top PL label (display in €)
                     try
                     {
-                        TxtTotalPLTop.Text = string.Format(System.Globalization.CultureInfo.GetCultureInfo("de-DE"), "{0:0.00} €", sumTotalPlEur);
-                        TxtTotalPLTop.Foreground = sumTotalPlEur >= 0 ? PositivePlBrush : NegativePlBrush;
+                        var culture = CultureInfo.GetCultureInfo("de-DE");
+                        TxtTotalPL.Text = string.Format(culture, "{0:0.00} €", last);
+                        TxtTotalPL.Foreground = last >= 0 ? PositivePlBrush : NegativePlBrush;
+
+                        // also update the top PL label (display in €)
+                        try
+                        {
+                            TxtTotalPLTop.Text = string.Format(culture, "{0:0.00} €", last);
+                            TxtTotalPLTop.Foreground = last >= 0 ? PositivePlBrush : NegativePlBrush;
+                        }
+                        catch { }
+
+                        _lastPlValue = last;
                     }
                     catch { }
-                    // update cached last value
-                    _lastPlValue = sumTotalPlEur;
                 };
 
                 if (Dispatcher.CheckAccess())
@@ -1182,6 +1815,8 @@ namespace TradeMVVM.Trading.Views.Charts
                     try { chromeCount = System.Diagnostics.Process.GetProcessesByName("chrome").Length; } catch { }
 
                     var processText = $"chromedriver: {chromedriverCount}, chrome: {chromeCount}";
+                    // mirror into Alert-Center VM
+                    try { if (_alertVm != null) _alertVm.AlertStatusProcesses = processText; } catch { }
                     if (!string.Equals(processText, _lastStatusProcessesText, StringComparison.Ordinal))
                     {
                         _lastStatusProcessesText = processText;
@@ -1202,6 +1837,8 @@ namespace TradeMVVM.Trading.Views.Charts
                 catch { }
 
                 var stocksText = $"stocks: {stockCount}";
+                // mirror into Alert-Center VM
+                try { if (_alertVm != null) _alertVm.AlertStatusStocks = stocksText; } catch { }
                 if (!string.Equals(stocksText, _lastStatusStocksText, StringComparison.Ordinal))
                 {
                     _lastStatusStocksText = stocksText;
@@ -1229,6 +1866,8 @@ namespace TradeMVVM.Trading.Views.Charts
                     catch { }
 
                     var historyText = $"points: {points}";
+                    // mirror into Alert-Center VM
+                    try { if (_alertVm != null) _alertVm.AlertStatusHistory = historyText; } catch { }
                     if (!string.Equals(historyText, _lastStatusHistoryText, StringComparison.Ordinal))
                     {
                         _lastStatusHistoryText = historyText;
@@ -1238,7 +1877,23 @@ namespace TradeMVVM.Trading.Views.Charts
                     _lastHistoryStatusUpdateUtc = nowUtc;
                 }
 
-                TxtStatusTime.Text = DateTime.Now.ToString("HH:mm:ss");
+                var timeText = DateTime.Now.ToString("HH:mm:ss");
+                TxtStatusTime.Text = timeText;
+                try { if (_alertVm != null) _alertVm.AlertStatusTime = timeText; } catch { }
+
+                // ensure Alert-Center bindings always reflect the latest known status values
+                try
+                {
+                    if (_alertVm != null)
+                    {
+                        _alertVm.AlertStatusProcesses = _lastStatusProcessesText ?? string.Empty;
+                        _alertVm.AlertStatusStocks = _lastStatusStocksText ?? string.Empty;
+                        _alertVm.AlertStatusHistory = _lastStatusHistoryText ?? string.Empty;
+                        _alertVm.AlertStatusTime = timeText;
+                        try { _alertVm.AlertMessage = TxtAlertToast?.Text ?? string.Empty; } catch { }
+                    }
+                }
+                catch { }
                 // update total P/L from DB (only changes when a newer valid price exists)
                 try
                 {
@@ -1517,7 +2172,7 @@ namespace TradeMVVM.Trading.Views.Charts
 
         // When previously a PL history series was rendered, this method rebuilt it from the DB.
         // PL graph removed — keep a lightweight stub that updates the current PL value from DB.
-        private void ReloadUnrealizedPlSeriesFromDb(TimeSpan span, DateTime referenceMax)
+        private void ReloadUnrealizedPlSeriesFromDb(TimeSpan spanParam, DateTime referenceMax)
         {
             try
             {
@@ -2016,6 +2671,7 @@ namespace TradeMVVM.Trading.Views.Charts
 
             PlotStocks.Refresh();
             PlotKnockouts.Refresh();
+            try { Dispatcher.BeginInvoke(new Action(() => UpdateAllYAxisTextBoxes()), System.Windows.Threading.DispatcherPriority.Background); } catch { }
         }
 
         public void ApplyZoom(
@@ -2030,6 +2686,7 @@ namespace TradeMVVM.Trading.Views.Charts
             // keep existing top plot data unchanged
             PlotStocks.Refresh();
             PlotKnockouts.Refresh();
+            try { Dispatcher.BeginInvoke(new Action(() => UpdateAllYAxisTextBoxes()), System.Windows.Threading.DispatcherPriority.Background); } catch { }
         }
 
         private void SyncXAxis()
@@ -2054,6 +2711,8 @@ namespace TradeMVVM.Trading.Views.Charts
 
             PlotKnockouts.Refresh();
             try { PlotStocksTop.Refresh(); } catch { }
+
+            try { Dispatcher.BeginInvoke(new Action(() => UpdateAllYAxisTextBoxes()), System.Windows.Threading.DispatcherPriority.Background); } catch { }
 
             // Ensure we load persisted top-plot history once after the X axis is finalized
             try

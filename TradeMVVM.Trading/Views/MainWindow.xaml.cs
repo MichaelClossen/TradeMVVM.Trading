@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -19,6 +20,8 @@ namespace TradeMVVM.Trading.Views
         private bool _isRefreshInProgress;
         private DateTime _lastRenderUtc = DateTime.MinValue;
         private int _lastRenderedPointCount = -1;
+        private DateTime _lastRenderedDataTimeUtc = DateTime.MinValue;
+        private string _lastRenderedSignature = string.Empty;
 
         public MainWindow()
         {
@@ -277,7 +280,66 @@ namespace TradeMVVM.Trading.Views
             catch { }
 
             var nowUtc = DateTime.UtcNow;
-            var hasDataChanged = totalPoints != _lastRenderedPointCount;
+
+            // determine latest data timestamp across all series to detect new incoming points
+            DateTime latestDataTimeUtc = DateTime.MinValue;
+            try
+            {
+                foreach (var kv in stockData)
+                {
+                    var list = kv.Value;
+                    if (list != null && list.Count > 0)
+                    {
+                        var t = list[list.Count - 1].Item1;
+                        if (t.Kind == DateTimeKind.Unspecified)
+                            t = DateTime.SpecifyKind(t, DateTimeKind.Local);
+                        var utc = t.ToUniversalTime();
+                        if (utc > latestDataTimeUtc) latestDataTimeUtc = utc;
+                    }
+                }
+                foreach (var kv in knockoutData)
+                {
+                    var list = kv.Value;
+                    if (list != null && list.Count > 0)
+                    {
+                        var t = list[list.Count - 1].Item1;
+                        if (t.Kind == DateTimeKind.Unspecified)
+                            t = DateTime.SpecifyKind(t, DateTimeKind.Local);
+                        var utc = t.ToUniversalTime();
+                        if (utc > latestDataTimeUtc) latestDataTimeUtc = utc;
+                    }
+                }
+            }
+            catch { }
+
+            // build a lightweight signature of the latest point per series (time+ticks+percent)
+            string signature = string.Empty;
+            try
+            {
+                var parts = new List<string>();
+                foreach (var kv in stockData.OrderBy(k => k.Key))
+                {
+                    var list = kv.Value;
+                    if (list != null && list.Count > 0)
+                    {
+                        var lp = list[list.Count - 1];
+                        parts.Add($"S|{kv.Key}|{lp.Item1.Ticks}|{lp.Item2.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}");
+                    }
+                }
+                foreach (var kv in knockoutData.OrderBy(k => k.Key))
+                {
+                    var list = kv.Value;
+                    if (list != null && list.Count > 0)
+                    {
+                        var lp = list[list.Count - 1];
+                        parts.Add($"K|{kv.Key}|{lp.Item1.Ticks}|{lp.Item2.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}");
+                    }
+                }
+                signature = string.Join(";", parts);
+            }
+            catch { }
+
+            var hasDataChanged = totalPoints != _lastRenderedPointCount || latestDataTimeUtc > _lastRenderedDataTimeUtc || !string.Equals(signature, _lastRenderedSignature, StringComparison.Ordinal);
             var periodicRefreshDue = (nowUtc - _lastRenderUtc) >= TimeSpan.FromSeconds(5);
 
             if (!hasDataChanged && !periodicRefreshDue)
@@ -293,6 +355,8 @@ namespace TradeMVVM.Trading.Views
                 try { System.Diagnostics.Debug.WriteLine($"Charts.Render failed: {ex}"); } catch { }
             }
             _lastRenderedPointCount = totalPoints;
+            _lastRenderedDataTimeUtc = latestDataTimeUtc > DateTime.MinValue ? latestDataTimeUtc : _lastRenderedDataTimeUtc;
+            _lastRenderedSignature = signature;
             _lastRenderUtc = nowUtc;
 
             // legend removed — no-op
