@@ -148,6 +148,36 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
                             }
                         }
                         catch { }
+
+            // Ensure viewmodel refresh is triggered on Loaded so persisted manual
+            // overrides are re-applied after XAML hot reloads and the orange
+            // derived-from-manual highlighting appears.
+            try
+            {
+                var vm = this.DataContext as HoldingsReportViewModel;
+                if (vm != null)
+                {
+                    try { vm.RefreshCommand?.Execute(null); } catch { }
+                }
+                else
+                {
+                    try
+                    {
+                        var dc = this.DataContext;
+                        if (dc != null)
+                        {
+                            var prop = dc.GetType().GetProperty("HoldingsReport");
+                            if (prop != null)
+                            {
+                                var hr = prop.GetValue(dc) as HoldingsReportViewModel;
+                                try { hr?.RefreshCommand?.Execute(null); } catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
                     }
                 }
             }
