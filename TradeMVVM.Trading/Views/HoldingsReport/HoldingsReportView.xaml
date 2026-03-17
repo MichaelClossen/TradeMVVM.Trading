@@ -130,6 +130,10 @@
                         <DataTrigger Binding="{Binding IsRecentlyPolled}" Value="True">
                             <Setter Property="Background" Value="#40FF0000" />
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding IsDerivedFromManual}" Value="True">
+                            <!-- highlight rows with values derived from manual overrides in light orange -->
+                            <Setter Property="Background" Value="#20FFA500" />
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
                 <Style TargetType="DataGridColumnHeader">
@@ -188,10 +192,45 @@
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
 
+                <!-- moved Akt. Kurs to appear before P/L % Vortag -->
+                <DataGridTemplateColumn Header="Akt. Kurs" Width="SizeToCells" MinWidth="70" SortMemberPath="CurrentPrice">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding DisplayCurrentPrice, StringFormat=N2, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" IsReadOnly="False">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox" BasedOn="{StaticResource CellTextBoxStyle}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsCurrentPriceManual}" Value="True">
+                                                <Setter Property="Background" Value="#FFFFE0B2" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsUsingLastValidCurrent}" Value="True">
+                                                <Setter Property="Background" Value="#FFFFE0B2" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
                 <DataGridTemplateColumn Header="P/L % Vortag" Width="SizeToCells" MinWidth="70" SortMemberPath="PLPercent">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
-                            <TextBox Text="{Binding PLPercent, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" Foreground="{Binding PLPercent, Converter={StaticResource NumToBrush}}" FontWeight="{Binding PLPercent, Converter={StaticResource NumToWeight}}" />
+                            <TextBox Text="{Binding DisplayPLPercent, StringFormat=N2, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" IsReadOnly="False" Foreground="{Binding DisplayPLPercent, Converter={StaticResource NumToBrush}}" FontWeight="{Binding DisplayPLPercent, Converter={StaticResource NumToWeight}}">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox" BasedOn="{StaticResource CellTextBoxStyle}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPLPercentManual}" Value="True">
+                                                <Setter Property="Background" Value="#FFFFE0B2" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsUsingLastValidPL}" Value="True">
+                                                <Setter Property="Background" Value="#FFFFE0B2" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
@@ -281,13 +320,7 @@
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
 
-                <DataGridTemplateColumn Header="Akt. Kurs" Width="SizeToCells" MinWidth="70" SortMemberPath="CurrentPrice">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <TextBox Text="{Binding CurrentPrice, StringFormat=N2}" Style="{StaticResource CellTextBoxStyle}" />
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
+                <!-- removed duplicate Akt. Kurs column (replaced by editable DisplayCurrentPrice column earlier) -->
 
                 <DataGridTemplateColumn Header="P/L € gesamt" Width="SizeToCells" MinWidth="90" SortMemberPath="PLAmount">
                     <DataGridTemplateColumn.CellTemplate>

@@ -47,6 +47,9 @@ namespace TradeMVVM.Trading.Services
         public Dictionary<string, double> IsinTrailingStopLastPlPercents { get; set; } = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, DateTime> IsinTrailingStopSetAtUtc { get; set; } = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, double> IsinTrailingPeakPercents { get; set; } = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        // persisted manual overrides per ISIN
+        public Dictionary<string, double> IsinManualCurrentPrices { get; set; } = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, double> IsinManualPLPercents { get; set; } = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         // diagnostic logging in HoldingsReportViewModel (HoldingsSnapshot / MOV)
         public bool EnableHoldingsSnapshotLogging { get; set; } = false;
         public double MainWindowWidth { get; set; } = 2200.0;
@@ -105,6 +108,8 @@ namespace TradeMVVM.Trading.Services
                     IsinTrailingStopLastPlPercents = doc.IsinTrailingStopLastPlPercents ?? IsinTrailingStopLastPlPercents;
                     IsinTrailingStopSetAtUtc = doc.IsinTrailingStopSetAtUtc ?? IsinTrailingStopSetAtUtc;
                     IsinTrailingPeakPercents = doc.IsinTrailingPeakPercents ?? IsinTrailingPeakPercents;
+                    IsinManualCurrentPrices = doc.IsinManualCurrentPrices ?? IsinManualCurrentPrices;
+                    IsinManualPLPercents = doc.IsinManualPLPercents ?? IsinManualPLPercents;
                     EnableHoldingsSnapshotLogging = doc.EnableHoldingsSnapshotLogging;
                     MainWindowWidth = doc.MainWindowWidth > 0 ? doc.MainWindowWidth : MainWindowWidth;
                     MainWindowHeight = doc.MainWindowHeight > 0 ? doc.MainWindowHeight : MainWindowHeight;
@@ -156,6 +161,8 @@ namespace TradeMVVM.Trading.Services
                      ,IsinTrailingStopLastPlPercents = IsinTrailingStopLastPlPercents
                      ,IsinTrailingStopSetAtUtc = IsinTrailingStopSetAtUtc
                     ,IsinTrailingPeakPercents = IsinTrailingPeakPercents
+                    ,IsinManualCurrentPrices = IsinManualCurrentPrices
+                    ,IsinManualPLPercents = IsinManualPLPercents
                     ,ChartsStocksYMin = ChartsStocksYMin
                     ,ChartsStocksYMax = ChartsStocksYMax
                     ,ChartsStocksTopYMin = ChartsStocksTopYMin
@@ -213,6 +220,8 @@ namespace TradeMVVM.Trading.Services
             public Dictionary<string, double> IsinTrailingStopLastPlPercents { get; set; }
             public Dictionary<string, DateTime> IsinTrailingStopSetAtUtc { get; set; }
             public Dictionary<string, double> IsinTrailingPeakPercents { get; set; }
+            public Dictionary<string, double> IsinManualCurrentPrices { get; set; }
+            public Dictionary<string, double> IsinManualPLPercents { get; set; }
             public bool EnableHoldingsSnapshotLogging { get; set; }
             public double MainWindowWidth { get; set; }
             public double MainWindowHeight { get; set; }

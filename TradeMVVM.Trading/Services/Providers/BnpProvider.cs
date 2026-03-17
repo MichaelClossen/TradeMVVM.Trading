@@ -32,6 +32,9 @@ namespace TradeMVVM.Trading.Services.Providers
                     var url = $"https://derivate.bnpparibas.com/product-details/{isin}/";
                     attemptedUrls?.Add(url);
 
+               
+
+
                     var response = await _client.GetAsync(url, token);
                     if (!response.IsSuccessStatusCode)
                     {

@@ -17,9 +17,16 @@ using System.Data.SQLite;
 
 namespace TradeMVVM.Trading.ViewModels
 {
+    // duplicate HoldingsRow removed; single definition kept below
     public class HoldingsRow : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
+
+        // Helper to raise PropertyChanged from external callers (allowed because method is defined on the type)
+        public void RaisePropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
 
         public string ISIN { get; set; }
         // Forecast for next 5 days (computed from recent price history)
@@ -42,6 +49,92 @@ namespace TradeMVVM.Trading.ViewModels
         // new columns: native market value and P/L columns (to be filled)
         public double MarketValue { get; set; }
         public double PLPercent { get; set; }
+        // manual/override handling for CurrentPrice and PLPercent
+        private bool _isCurrentPriceManual;
+        public bool IsCurrentPriceManual
+        {
+            get => _isCurrentPriceManual;
+            set { if (_isCurrentPriceManual == value) return; _isCurrentPriceManual = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCurrentPriceManual))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayCurrentPrice))); }
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+        private double _manualCurrentPrice = double.NaN;
+        public double ManualCurrentPrice
+        {
+            get => _manualCurrentPrice;
+            set { if (Math.Abs(_manualCurrentPrice - value) < 1e-9) return; _manualCurrentPrice = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ManualCurrentPrice))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayCurrentPrice))); }
+        }
+        private double _lastValidCurrentPrice = double.NaN;
+        public double LastValidCurrentPrice
+        {
+            get => _lastValidCurrentPrice;
+            set { if (Math.Abs(_lastValidCurrentPrice - value) < 1e-9) return; _lastValidCurrentPrice = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastValidCurrentPrice))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayCurrentPrice))); }
+        }
+
+        // Display value used by the UI (reflects manual override, provider value or last valid fallback)
+        public double DisplayCurrentPrice
+        {
+            get
+            {
+                if (IsCurrentPriceManual && !double.IsNaN(ManualCurrentPrice)) return ManualCurrentPrice;
+                if (!double.IsNaN(CurrentPrice)) return CurrentPrice;
+                return LastValidCurrentPrice;
+            }
+            set
+            {
+                // user edited display value -> treat as manual override
+                ManualCurrentPrice = value;
+                IsCurrentPriceManual = true;
+            }
+        }
+
+        public bool IsUsingLastValidCurrent => !IsCurrentPriceManual && double.IsNaN(CurrentPrice) && !double.IsNaN(LastValidCurrentPrice);
+
+        private bool _isPLPercentManual;
+        public bool IsPLPercentManual
+        {
+            get => _isPLPercentManual;
+            set { if (_isPLPercentManual == value) return; _isPLPercentManual = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPLPercentManual))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayPLPercent))); }
+        }
+        private double _manualPLPercent = double.NaN;
+        public double ManualPLPercent
+        {
+            get => _manualPLPercent;
+            set { if (Math.Abs(_manualPLPercent - value) < 1e-9) return; _manualPLPercent = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ManualPLPercent))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayPLPercent))); }
+        }
+        private double _lastValidPLPercent = double.NaN;
+        public double LastValidPLPercent
+        {
+            get => _lastValidPLPercent;
+            set { if (Math.Abs(_lastValidPLPercent - value) < 1e-9) return; _lastValidPLPercent = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastValidPLPercent))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayPLPercent))); }
+        }
+
+        public double DisplayPLPercent
+        {
+            get
+            {
+                if (IsPLPercentManual && !double.IsNaN(ManualPLPercent)) return ManualPLPercent;
+                if (!double.IsNaN(PLPercent)) return PLPercent;
+                return LastValidPLPercent;
+            }
+            set
+            {
+                ManualPLPercent = value;
+                IsPLPercentManual = true;
+            }
+        }
+
+        public bool IsUsingLastValidPL => !IsPLPercentManual && (double.IsNaN(PLPercent)) && !double.IsNaN(LastValidPLPercent);
         private double _alertThresholdPercent = 1.0;
         public double AlertThresholdPercent
         {
@@ -122,6 +215,17 @@ namespace TradeMVVM.Trading.ViewModels
                     _highlightTimer.Start();
                 }
             }
+        }
+
+        private bool _isDerivedFromManual;
+        /// <summary>
+        /// True when one or more displayed values for this row were computed from a manual override
+        /// (used to highlight dependent fields that are derived from user input).
+        /// </summary>
+        public bool IsDerivedFromManual
+        {
+            get => _isDerivedFromManual;
+            set { if (_isDerivedFromManual == value) return; _isDerivedFromManual = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDerivedFromManual))); }
         }
 
         public bool IsRecentlyPolled
@@ -415,6 +519,161 @@ namespace TradeMVVM.Trading.ViewModels
             catch { }
         }
 
+
+        // Helper moved to a static helper to avoid scoping issues when called from lambdas.
+        private static void ApplyDerivedFromManual_Static(HoldingsRow row, TradeMVVM.Trading.DataAnalysis.Holding sourceHolding)
+        {
+            if (row == null) return;
+            bool derived = false;
+
+            double effectivePrice = double.NaN;
+            if (row.IsCurrentPriceManual && !double.IsNaN(row.ManualCurrentPrice) && !double.IsInfinity(row.ManualCurrentPrice))
+            {
+                effectivePrice = row.ManualCurrentPrice;
+                derived = true;
+            }
+            else if (!double.IsNaN(row.CurrentPrice))
+            {
+                effectivePrice = row.CurrentPrice;
+            }
+
+            // ensure RealizedPL is present when available from source
+            try
+            {
+                    if ((double.IsNaN(row.RealizedPL) || double.IsInfinity(row.RealizedPL)) && sourceHolding != null && !double.IsNaN(sourceHolding.RealizedPL))
+                {
+                    row.RealizedPL = sourceHolding.RealizedPL;
+                    try { row.RaisePropertyChanged(nameof(HoldingsRow.RealizedPL)); } catch { }
+                    derived = true;
+                }
+            }
+            catch { }
+
+            // compute MarketValue when manual price present or if missing
+            try
+            {
+                if (!double.IsNaN(effectivePrice) && sourceHolding != null)
+                {
+                    var newMv = Math.Round(sourceHolding.Shares * effectivePrice, 2);
+                    if (double.IsNaN(row.MarketValue) || row.IsCurrentPriceManual || Math.Abs(row.MarketValue - newMv) > 1e-9)
+                    {
+                        row.MarketValue = newMv;
+                        try { row.RaisePropertyChanged(nameof(HoldingsRow.MarketValue)); } catch { }
+                        derived = true;
+                    }
+                }
+            }
+            catch { }
+
+            // compute UnrealizedPL from effective price and avg buy when manual or missing
+            double avgBuy = double.NaN;
+            if (sourceHolding != null) avgBuy = sourceHolding.RemainingBoughtShares > 0 ? sourceHolding.RemainingBoughtAmount / sourceHolding.RemainingBoughtShares : double.NaN;
+            try
+            {
+                if (!double.IsNaN(effectivePrice) && !double.IsNaN(avgBuy) && sourceHolding != null)
+                {
+                    var newUnreal = Math.Round(sourceHolding.Shares * (effectivePrice - avgBuy), 2);
+                    if (double.IsNaN(row.UnrealizedPL) || row.IsCurrentPriceManual || Math.Abs(row.UnrealizedPL - newUnreal) > 1e-9)
+                    {
+                        row.UnrealizedPL = newUnreal;
+                        try { row.RaisePropertyChanged(nameof(HoldingsRow.UnrealizedPL)); } catch { }
+                        derived = true;
+                    }
+                }
+            }
+            catch { }
+
+            // compute PLAmount (EUR) when market value available or when manual price changed
+            try
+            {
+                if (!double.IsNaN(row.MarketValue) && sourceHolding != null)
+                {
+                    double cost = !double.IsNaN(sourceHolding.RemainingBoughtAmount) && sourceHolding.RemainingBoughtAmount != 0 ? sourceHolding.RemainingBoughtAmount : (!double.IsNaN(avgBuy) ? sourceHolding.Shares * avgBuy : double.NaN);
+                    if (!double.IsNaN(cost))
+                    {
+                        var diff = row.MarketValue - cost;
+                        var newPlAmount = Math.Round(new CurrencyConverter().ConvertToEur(diff, row.Currency), 2);
+                        if (double.IsNaN(row.PLAmount) || row.IsCurrentPriceManual || Math.Abs(row.PLAmount - newPlAmount) > 1e-9)
+                        {
+                            row.PLAmount = newPlAmount;
+                            try { row.RaisePropertyChanged(nameof(HoldingsRow.PLAmount)); } catch { }
+                            derived = true;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // compute PLPercent: prefer manual override, otherwise derive from prices when possible
+            try
+            {
+                if (row.IsPLPercentManual && !double.IsNaN(row.ManualPLPercent) && !double.IsInfinity(row.ManualPLPercent))
+                {
+                    if (double.IsNaN(row.PLPercent) || Math.Abs(row.PLPercent - row.ManualPLPercent) > 1e-9)
+                    {
+                        row.PLPercent = row.ManualPLPercent;
+                        try { row.RaisePropertyChanged(nameof(HoldingsRow.PLPercent)); } catch { }
+                        derived = true;
+                    }
+                }
+                else if (!double.IsNaN(effectivePrice) && !double.IsNaN(avgBuy) && avgBuy != 0)
+                {
+                    var newPercent = Math.Round((effectivePrice - avgBuy) / avgBuy * 100.0, 2);
+                    if (double.IsNaN(row.PLPercent) || row.IsCurrentPriceManual || Math.Abs(row.PLPercent - newPercent) > 1e-9)
+                    {
+                        row.PLPercent = newPercent;
+                        try { row.RaisePropertyChanged(nameof(HoldingsRow.PLPercent)); } catch { }
+                        derived = true;
+                    }
+                }
+            }
+            catch { }
+
+            // recompute TotalPL from realized + unrealized when manual or missing
+            try
+            {
+                double r = double.IsNaN(row.RealizedPL) ? 0.0 : row.RealizedPL;
+                double u = double.IsNaN(row.UnrealizedPL) ? 0.0 : row.UnrealizedPL;
+                var newTotal = Math.Round(r + u, 2);
+                if (double.IsNaN(row.TotalPL) || row.IsCurrentPriceManual || row.IsPLPercentManual || Math.Abs(row.TotalPL - newTotal) > 1e-9)
+                {
+                    row.TotalPL = newTotal;
+                    try { row.RaisePropertyChanged(nameof(HoldingsRow.TotalPL)); } catch { }
+                    derived = true;
+                }
+            }
+            catch { }
+
+            // set provider time to now for manual-derived rows if not provided
+            try
+            {
+                if ((row.IsCurrentPriceManual || row.IsPLPercentManual) && (!row.ProviderTime.HasValue || row.ProviderTime.Value == default(DateTime)))
+                {
+                    row.ProviderTime = DateTime.UtcNow;
+                    try { row.RaisePropertyChanged(nameof(HoldingsRow.ProviderTime)); } catch { }
+                    derived = true;
+                }
+            }
+            catch { }
+
+            row.IsDerivedFromManual = derived;
+            try { row.RaisePropertyChanged(nameof(HoldingsRow.IsDerivedFromManual)); } catch { }
+        }
+
+        // Instance wrapper kept for compatibility with existing call sites that may
+        // reference the original method name. Delegates to the static implementation.
+        private void ApplyDerivedFromManual(HoldingsRow row, TradeMVVM.Trading.DataAnalysis.Holding sourceHolding)
+        {
+            ApplyDerivedFromManual_Static(row, sourceHolding);
+        }
+
+        // Static alias also provided to satisfy any static call sites or references
+        // that expect a method named ApplyDerivedFromManual in static context.
+        private static void ApplyDerivedFromManual(HoldingsRow row, TradeMVVM.Trading.DataAnalysis.Holding sourceHolding, bool _staticAlias = true)
+        {
+            ApplyDerivedFromManual_Static(row, sourceHolding);
+        }
+
         // expose internal source holdings for other UI components (read-only)
         public List<Holding> GetSourceHoldings()
         {
@@ -498,6 +757,66 @@ namespace TradeMVVM.Trading.ViewModels
                             _isinTrailingStopSetAtUtc[key] = DateTime.SpecifyKind(kv.Value, DateTimeKind.Utc);
                         }
                     }
+
+                    // load persisted manual overrides
+                    try
+                    {
+                        // manual current prices
+                        try
+                        {
+                            if (settings.IsinManualCurrentPrices != null)
+                            {
+                                foreach (var kv in settings.IsinManualCurrentPrices)
+                                {
+                                    try
+                                    {
+                                        var key = NormalizeIsin(kv.Key);
+                                        if (string.IsNullOrWhiteSpace(key)) continue;
+                                        // find existing HoldingsRow and apply manual value when available
+                                        var row = Holdings.FirstOrDefault(r => NormalizeIsin(r.ISIN) == key);
+                                        if (row != null)
+                                        {
+                                            if (!double.IsNaN(kv.Value) && !double.IsInfinity(kv.Value))
+                                            {
+                                                row.IsCurrentPriceManual = true;
+                                                row.ManualCurrentPrice = kv.Value;
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                        catch { }
+
+                        // manual PL percents
+                        try
+                        {
+                            if (settings.IsinManualPLPercents != null)
+                            {
+                                foreach (var kv in settings.IsinManualPLPercents)
+                                {
+                                    try
+                                    {
+                                        var key = NormalizeIsin(kv.Key);
+                                        if (string.IsNullOrWhiteSpace(key)) continue;
+                                        var row = Holdings.FirstOrDefault(r => NormalizeIsin(r.ISIN) == key);
+                                        if (row != null)
+                                        {
+                                            if (!double.IsNaN(kv.Value) && !double.IsInfinity(kv.Value))
+                                            {
+                                                row.IsPLPercentManual = true;
+                                                row.ManualPLPercent = kv.Value;
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    catch { }
                 }
             }
             catch { }
@@ -597,37 +916,69 @@ namespace TradeMVVM.Trading.ViewModels
         {
             if (row == null)
                 return;
-
             row.PropertyChanged += (s, e) =>
             {
                 try
                 {
+                    // persist manual overrides when user edits DisplayCurrentPrice or DisplayPLPercent
+                    if (string.Equals(e.PropertyName, nameof(HoldingsRow.DisplayCurrentPrice), StringComparison.Ordinal) ||
+                        string.Equals(e.PropertyName, nameof(HoldingsRow.DisplayPLPercent), StringComparison.Ordinal))
+                    {
+                        try { PersistManualOverrides(); } catch { }
+
+                        // when a user explicitly sets a manual current price or PL% we must
+                        // compute dependent fields immediately (market value, unrealized/total PL,
+                        // PL amount in EUR) and set a provider time so the UI can show the row
+                        // as derived from manual input until a new provider value arrives.
+                        try
+                        {
+                            var r = s as HoldingsRow;
+                            if (r != null)
+                            {
+                                // set provider time to now if none present
+                                if (!r.ProviderTime.HasValue || r.ProviderTime.Value == default(DateTime))
+                                {
+                                    r.ProviderTime = DateTime.UtcNow;
+                                }
+
+                                // apply derived calculations based on manual overrides using the source holding
+                                try
+                                {
+                                    var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), NormalizeIsin(r.ISIN), StringComparison.OrdinalIgnoreCase));
+                                    ApplyDerivedFromManual_Static(r, src);
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+                    }
+
                     if (!string.Equals(e.PropertyName, nameof(HoldingsRow.AlertThresholdPercent), StringComparison.Ordinal))
                     {
                         if (!string.Equals(e.PropertyName, nameof(HoldingsRow.TrailingStopPercent), StringComparison.Ordinal))
                             return;
                     }
 
-                    var r = s as HoldingsRow;
-                    if (r == null)
+                    var rr = s as HoldingsRow;
+                    if (rr == null)
                         return;
 
                     if (string.Equals(e.PropertyName, nameof(HoldingsRow.AlertThresholdPercent), StringComparison.Ordinal))
                     {
-                        if (double.IsNaN(r.AlertThresholdPercent) || double.IsInfinity(r.AlertThresholdPercent) || r.AlertThresholdPercent < 0)
+                        if (double.IsNaN(rr.AlertThresholdPercent) || double.IsInfinity(rr.AlertThresholdPercent) || rr.AlertThresholdPercent < 0)
                             return;
 
-                        PersistIsinAlertThreshold(r.ISIN, r.AlertThresholdPercent);
+                        PersistIsinAlertThreshold(rr.ISIN, rr.AlertThresholdPercent);
                     }
 
                     if (string.Equals(e.PropertyName, nameof(HoldingsRow.TrailingStopPercent), StringComparison.Ordinal))
                     {
-                        if (double.IsNaN(r.TrailingStopPercent) || double.IsInfinity(r.TrailingStopPercent) || r.TrailingStopPercent < 0)
+                        if (double.IsNaN(rr.TrailingStopPercent) || double.IsInfinity(rr.TrailingStopPercent) || rr.TrailingStopPercent < 0)
                             return;
 
-                        PersistIsinTrailingStopThreshold(r.ISIN, r.TrailingStopPercent);
-                        ResetTrailingStopState(r.ISIN, r.TrailingStopPercent, DateTime.UtcNow);
-                        r.TrailingStopConfiguredPercent = r.TrailingStopPercent;
+                        PersistIsinTrailingStopThreshold(rr.ISIN, rr.TrailingStopPercent);
+                        ResetTrailingStopState(rr.ISIN, rr.TrailingStopPercent, DateTime.UtcNow);
+                        rr.TrailingStopConfiguredPercent = rr.TrailingStopPercent;
                         SaveTrailingStopState(force: true);
                     }
                 }
@@ -897,6 +1248,7 @@ namespace TradeMVVM.Trading.ViewModels
                                 try
                                 {
                                     AttachThresholdHandler(tup.row);
+                                    // try find existing row to preserve manual overrides / last-valid values
                                     var idx = -1;
                                     for (int i = 0; i < Holdings.Count; i++)
                                     {
@@ -905,27 +1257,186 @@ namespace TradeMVVM.Trading.ViewModels
                                             idx = i; break;
                                         }
                                     }
-                                    bool markUpdated = false;
-                                    // mark every applied update as recently updated so user sees all changes
-                                    try
-                                    {
-                                        tup.row.IsRecentlyUpdated = true;
-                                    }
-                                    catch { }
 
+                                    // preserve manual overrides and last valid fallbacks
                                     if (idx >= 0)
                                     {
+                                        var existing = Holdings[idx];
+                                        try
+                                        {
+                                            // manual current price handling:
+                                            // - if existing row had a manual override and the new provider value is NaN -> preserve manual
+                                            // - if provider supplies a non-NaN value -> accept provider value and clear manual
+                                            if (existing.IsCurrentPriceManual)
+                                            {
+                                                if (double.IsNaN(tup.row.CurrentPrice))
+                                                {
+                                                    tup.row.IsCurrentPriceManual = true;
+                                                    tup.row.ManualCurrentPrice = existing.ManualCurrentPrice;
+                                                }
+                                                else
+                                                {
+                                                    // provider provided a concrete price -> adopt it and clear manual flag
+                                                    tup.row.IsCurrentPriceManual = false;
+                                                }
+                                            }
+
+                                            // update last valid current price: prefer provider value if available, otherwise keep previous last-valid
+                                            if (!double.IsNaN(tup.row.CurrentPrice))
+                                                tup.row.LastValidCurrentPrice = tup.row.CurrentPrice;
+                                            else
+                                                tup.row.LastValidCurrentPrice = existing.LastValidCurrentPrice;
+
+                                            // manual PL% handling (same semantics as current price)
+                                            if (existing.IsPLPercentManual)
+                                            {
+                                                if (double.IsNaN(tup.row.PLPercent))
+                                                {
+                                                    tup.row.IsPLPercentManual = true;
+                                                    tup.row.ManualPLPercent = existing.ManualPLPercent;
+                                                }
+                                                else
+                                                {
+                                                    tup.row.IsPLPercentManual = false;
+                                                }
+                                            }
+
+                                            // update last valid PL percent
+                                            if (!double.IsNaN(tup.row.PLPercent))
+                                                tup.row.LastValidPLPercent = tup.row.PLPercent;
+                                            else
+                                                tup.row.LastValidPLPercent = existing.LastValidPLPercent;
+                                        }
+                                        catch { }
+
+                                        // apply derived calculations based on manual overrides when provider values are missing
+                                        try
+                                        {
+                                            var sourceHolding = _source.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), NormalizeIsin(tup.isin), StringComparison.OrdinalIgnoreCase));
+                                            ApplyDerivedFromManual_Static(tup.row, sourceHolding);
+                                        }
+                                        catch { }
+
+                                        // mark updated and replace
+                                        try { tup.row.IsRecentlyUpdated = true; } catch { }
                                         Holdings[idx] = tup.row;
                                     }
                                     else
                                     {
+                                        // new row: initialize last-valid from provider values if present
+                                        try
+                                        {
+                                            if (!double.IsNaN(tup.row.CurrentPrice)) tup.row.LastValidCurrentPrice = tup.row.CurrentPrice;
+                                            if (!double.IsNaN(tup.row.PLPercent)) tup.row.LastValidPLPercent = tup.row.PLPercent;
+                                            tup.row.IsRecentlyUpdated = true;
+                                        }
+                                        catch { }
                                         Holdings.Add(tup.row);
                                     }
                                 }
                                 catch { }
                             }
 
+                            // after applying all updates, ensure derived-from-manual calculations are applied for new rows as well
+                            try
+                            {
+                                foreach (var r in Holdings)
+                                {
+                                    try
+                                    {
+                                        var src = _source.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), NormalizeIsin(r.ISIN), StringComparison.OrdinalIgnoreCase));
+                                        ApplyDerivedFromManual_Static(r, src);
+                                    }
+                                    catch { }
+                                }
+                            }
+                            catch { }
+
                             SaveTrailingStopState(force: false);
+
+            // Re-apply persisted manual overrides from settings to the freshly built Holdings
+            // so manual values survive application restarts and rows remain highlighted
+            // until a new valid provider value appears.
+            try
+            {
+                var settings = App.Services?.GetService(typeof(TradeMVVM.Trading.Services.SettingsService)) as TradeMVVM.Trading.Services.SettingsService;
+                if (settings != null)
+                {
+                    try
+                    {
+                        if (settings.IsinManualCurrentPrices != null)
+                        {
+                            foreach (var kv in settings.IsinManualCurrentPrices)
+                            {
+                                try
+                                {
+                                    var key = NormalizeIsin(kv.Key);
+                                    if (string.IsNullOrWhiteSpace(key)) continue;
+                                    var row = Holdings.FirstOrDefault(r => NormalizeIsin(r.ISIN) == key);
+                                    if (row == null) continue;
+                                    if (!double.IsNaN(kv.Value) && !double.IsInfinity(kv.Value))
+                                    {
+                                        row.IsCurrentPriceManual = true;
+                                        row.ManualCurrentPrice = kv.Value;
+                                        // ensure provider time is set so UI treats this as a manual-derived row
+                                        if (!row.ProviderTime.HasValue || row.ProviderTime.Value == default(DateTime))
+                                            row.ProviderTime = DateTime.UtcNow;
+                                        var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), key, StringComparison.OrdinalIgnoreCase));
+                                        ApplyDerivedFromManual_Static(row, src);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        if (settings.IsinManualPLPercents != null)
+                        {
+                            foreach (var kv in settings.IsinManualPLPercents)
+                            {
+                                try
+                                {
+                                    var key = NormalizeIsin(kv.Key);
+                                    if (string.IsNullOrWhiteSpace(key)) continue;
+                                    var row = Holdings.FirstOrDefault(r => NormalizeIsin(r.ISIN) == key);
+                                    if (row == null) continue;
+                                    if (!double.IsNaN(kv.Value) && !double.IsInfinity(kv.Value))
+                                    {
+                                        row.IsPLPercentManual = true;
+                                        row.ManualPLPercent = kv.Value;
+                                        if (!row.ProviderTime.HasValue || row.ProviderTime.Value == default(DateTime))
+                                            row.ProviderTime = DateTime.UtcNow;
+                                        var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), key, StringComparison.OrdinalIgnoreCase));
+                                        ApplyDerivedFromManual_Static(row, src);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            // After refresh, apply derived-from-manual calculations for each row so that
+            // NaN fields get computed from manual overrides and the UI can highlight them.
+            try
+            {
+                foreach (var r in Holdings)
+                {
+                    try
+                    {
+                        var src = _source.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), NormalizeIsin(r.ISIN), StringComparison.OrdinalIgnoreCase));
+                        ApplyDerivedFromManual_Static(r, src);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
 
                             // lightweight totals update
                             try
@@ -966,6 +1477,26 @@ namespace TradeMVVM.Trading.ViewModels
         private void Refresh()
         {
             // rebuild source list and then apply filter
+            // preserve manual overrides and last-valid values from existing rows so that
+            // Refresh() does not overwrite user-entered manual values with provider NaN values
+            var preservedCurrent = new Dictionary<string, (bool isManual, double manualValue, double lastValid)>(StringComparer.OrdinalIgnoreCase);
+            var preservedPl = new Dictionary<string, (bool isManual, double manualValue, double lastValid)>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var r in Holdings)
+                {
+                    try
+                    {
+                        var key = NormalizeIsin(r.ISIN);
+                        if (string.IsNullOrWhiteSpace(key)) continue;
+                        preservedCurrent[key] = (r.IsCurrentPriceManual, r.ManualCurrentPrice, r.LastValidCurrentPrice);
+                        preservedPl[key] = (r.IsPLPercentManual, r.ManualPLPercent, r.LastValidPLPercent);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
             Holdings.Clear();
             // load latest prices from DB to populate CurrentPrice (Akt. Kurs)
             var repo = new TradeMVVM.Trading.Data.PriceRepository();
@@ -1102,6 +1633,13 @@ namespace TradeMVVM.Trading.ViewModels
                     ,TrailingStopPercent = Math.Round(trailingCurrent, 2)
                     ,TrailingStopConfiguredPercent = Math.Round(trailingConfigured, 2)
                     ,ProviderTime = providerTime
+                    // initialize manual/last-valid fields (restore preserved manual overrides when available)
+                    ,IsCurrentPriceManual = (preservedCurrent.TryGetValue(NormalizeIsin(h.ISIN), out var cur) ? cur.isManual : false)
+                    ,ManualCurrentPrice = (preservedCurrent.TryGetValue(NormalizeIsin(h.ISIN), out cur) ? cur.manualValue : double.NaN)
+                    ,LastValidCurrentPrice = (preservedCurrent.TryGetValue(NormalizeIsin(h.ISIN), out cur) && !double.IsNaN(cur.lastValid) ? cur.lastValid : (latestPoints.TryGetValue(h.ISIN, out var sp2) && !double.IsNaN(sp2.Price) ? sp2.Price : double.NaN))
+                    ,IsPLPercentManual = (preservedPl.TryGetValue(NormalizeIsin(h.ISIN), out var pl) ? pl.isManual : false)
+                    ,ManualPLPercent = (preservedPl.TryGetValue(NormalizeIsin(h.ISIN), out pl) ? pl.manualValue : double.NaN)
+                    ,LastValidPLPercent = (preservedPl.TryGetValue(NormalizeIsin(h.ISIN), out pl) && !double.IsNaN(pl.lastValid) ? pl.lastValid : (latestPoints.TryGetValue(h.ISIN, out var sp3) && !double.IsNaN(sp3.Percent) ? Math.Round(sp3.Percent, 2) : double.NaN))
                 });
 
                 try { AttachThresholdHandler(Holdings.LastOrDefault()); } catch { }
@@ -1162,6 +1700,89 @@ namespace TradeMVVM.Trading.ViewModels
 
             // notify listeners that holdings have been refreshed
             HoldingsUpdated?.Invoke(_source);
+        }
+
+        // Persist manual overrides from current Holdings into settings
+        private void PersistManualOverrides()
+        {
+            try
+            {
+                var settings = App.Services?.GetService(typeof(TradeMVVM.Trading.Services.SettingsService)) as TradeMVVM.Trading.Services.SettingsService;
+                if (settings == null) return;
+
+                var manualPrices = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                var manualPls = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var r in Holdings)
+                {
+                    try
+                    {
+                        var key = NormalizeIsin(r.ISIN);
+                        if (string.IsNullOrWhiteSpace(key)) continue;
+                        if (r.IsCurrentPriceManual && !double.IsNaN(r.ManualCurrentPrice) && !double.IsInfinity(r.ManualCurrentPrice))
+                            manualPrices[key] = r.ManualCurrentPrice;
+                        if (r.IsPLPercentManual && !double.IsNaN(r.ManualPLPercent) && !double.IsInfinity(r.ManualPLPercent))
+                            manualPls[key] = r.ManualPLPercent;
+                    }
+                    catch { }
+                }
+
+                settings.IsinManualCurrentPrices = manualPrices;
+                settings.IsinManualPLPercents = manualPls;
+                settings.Save();
+                // Persist manual overrides into Prices DB so they act as provider entries
+                try
+                {
+                    var db = new TradeMVVM.Trading.Services.DatabaseService();
+                    // insert manual current prices
+                    foreach (var kv in manualPrices)
+                    {
+                        try
+                        {
+                            var sp = new TradeMVVM.Domain.StockPoint
+                            {
+                                ISIN = kv.Key,
+                                Time = DateTime.UtcNow,
+                                Price = kv.Value,
+                                Percent = double.NaN,
+                                Provider = "Manual",
+                                ProviderTime = DateTime.UtcNow,
+                                Forecast = null,
+                                PredictedPrice = double.NaN
+                            };
+                            db.Insert(sp);
+                        }
+                        catch { }
+                    }
+
+                    // insert manual PL percents (if no corresponding manual price was set)
+                    foreach (var kv in manualPls)
+                    {
+                        try
+                        {
+                            // if a manual price already exists for this ISIN, prefer that row
+                            if (manualPrices.ContainsKey(kv.Key))
+                                continue;
+
+                            var sp = new TradeMVVM.Domain.StockPoint
+                            {
+                                ISIN = kv.Key,
+                                Time = DateTime.UtcNow,
+                                Price = double.NaN,
+                                Percent = kv.Value,
+                                Provider = "Manual",
+                                ProviderTime = DateTime.UtcNow,
+                                Forecast = null,
+                                PredictedPrice = double.NaN
+                            };
+                            db.Insert(sp);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            catch { }
         }
 
         private void ApplyFilter()

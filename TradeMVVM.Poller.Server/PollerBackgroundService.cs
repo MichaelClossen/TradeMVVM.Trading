@@ -486,17 +486,17 @@ static class PollerHelpers
         }
         catch { }
 
-        // attempt a best-effort backfill for existing rows where Price != 0 but Percent is missing/zero
-        try
-        {
-            var dbForBackfill = new TradeMVVM.Trading.Services.DatabaseService();
-            var updated = dbForBackfill.BackfillPercentWhereZero();
-            try { _logger.LogInformation("BackfillPercentWhereZero updated {count} rows", updated); } catch { }
-        }
-        catch (Exception ex)
-        {
-            try { _logger.LogWarning(ex, "BackfillPercentWhereZero failed"); } catch { }
-        }
+        //// attempt a best-effort backfill for existing rows where Price != 0 but Percent is missing/zero
+        //try
+        //{
+        //    var dbForBackfill = new TradeMVVM.Trading.Services.DatabaseService();
+        //    var updated = dbForBackfill.BackfillPercentWhereZero();
+        //    try { _logger.LogInformation("BackfillPercentWhereZero updated {count} rows", updated); } catch { }
+        //}
+        //catch (Exception ex)
+        //{
+        //    try { _logger.LogWarning(ex, "BackfillPercentWhereZero failed"); } catch { }
+        //}
 
         try
         {
@@ -653,6 +653,7 @@ static class PollerHelpers
                         // try BNP HTML
                         try
                         {
+                      
                             var bnpUrl = $"https://derivate.bnpparibas.com/product-details/{isin}/";
                             var html = await GetStringWithRetriesAsync(bnpUrl, token).ConfigureAwait(false);
                             if (html != null)
