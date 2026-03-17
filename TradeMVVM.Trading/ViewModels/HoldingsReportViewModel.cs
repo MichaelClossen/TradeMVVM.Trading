@@ -1650,6 +1650,73 @@ namespace TradeMVVM.Trading.ViewModels
                 sumMarketEur += mvEur;
             }
 
+            // Re-apply persisted manual overrides from settings so manual values
+            // survive application restarts and rows remain highlighted until a
+            // new valid provider value appears.
+            try
+            {
+                var settings = App.Services?.GetService(typeof(TradeMVVM.Trading.Services.SettingsService)) as TradeMVVM.Trading.Services.SettingsService;
+                if (settings != null)
+                {
+                    try
+                    {
+                        if (settings.IsinManualCurrentPrices != null)
+                        {
+                            foreach (var kv in settings.IsinManualCurrentPrices)
+                            {
+                                try
+                                {
+                                    var key = NormalizeIsin(kv.Key);
+                                    if (string.IsNullOrWhiteSpace(key)) continue;
+                                    var row = Holdings.FirstOrDefault(r => NormalizeIsin(r.ISIN) == key);
+                                    if (row == null) continue;
+                                    if (!double.IsNaN(kv.Value) && !double.IsInfinity(kv.Value))
+                                    {
+                                        row.IsCurrentPriceManual = true;
+                                        row.ManualCurrentPrice = kv.Value;
+                                        if (!row.ProviderTime.HasValue || row.ProviderTime.Value == default(DateTime))
+                                            row.ProviderTime = DateTime.UtcNow;
+                                        var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), key, StringComparison.OrdinalIgnoreCase));
+                                        ApplyDerivedFromManual_Static(row, src);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        if (settings.IsinManualPLPercents != null)
+                        {
+                            foreach (var kv in settings.IsinManualPLPercents)
+                            {
+                                try
+                                {
+                                    var key = NormalizeIsin(kv.Key);
+                                    if (string.IsNullOrWhiteSpace(key)) continue;
+                                    var row = Holdings.FirstOrDefault(r => NormalizeIsin(r.ISIN) == key);
+                                    if (row == null) continue;
+                                    if (!double.IsNaN(kv.Value) && !double.IsInfinity(kv.Value))
+                                    {
+                                        row.IsPLPercentManual = true;
+                                        row.ManualPLPercent = kv.Value;
+                                        if (!row.ProviderTime.HasValue || row.ProviderTime.Value == default(DateTime))
+                                            row.ProviderTime = DateTime.UtcNow;
+                                        var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), key, StringComparison.OrdinalIgnoreCase));
+                                        ApplyDerivedFromManual_Static(row, src);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
             TotalRealizedPL = sumRealized;
             TotalUnrealizedPL = sumUnrealized;
             TotalPL = sumRealized + sumUnrealized;
