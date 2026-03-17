@@ -16,6 +16,7 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
     public partial class HoldingsReportView : UserControl
     {
         private readonly string _settingsPath;
+        private readonly string _zoomFilePath;
         private readonly TradeMVVM.Trading.Services.SettingsService _settingsService;
         private const string ZoomSettingsKey = "__ZoomPercent__";
         private const double BaseFontSize = 9.0;
@@ -27,11 +28,13 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
         public HoldingsReportView()
         {
             InitializeComponent();
-            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            var dataDir = System.IO.Path.Combine(baseDir, "DataAnalysis");
-            if (!Directory.Exists(dataDir))
-                Directory.CreateDirectory(dataDir);
-            _settingsPath = System.IO.Path.Combine(dataDir, "column_widths.csv");
+            // persist column widths and zoom in per-user AppData location to avoid
+            // write-permission problems when app is installed under Program Files
+            var appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TradeMVVM.Trading");
+            if (!Directory.Exists(appDataDir))
+                Directory.CreateDirectory(appDataDir);
+            _settingsPath = Path.Combine(appDataDir, "column_widths.csv");
+            _zoomFilePath = Path.Combine(appDataDir, "holdings_zoom.txt");
             try
             {
                 _settingsService = App.Services?.GetService(typeof(TradeMVVM.Trading.Services.SettingsService)) as TradeMVVM.Trading.Services.SettingsService;
@@ -214,19 +217,25 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
                         if (savedZoom.HasValue)
                         {
                             var clamped = Math.Max(MinZoomPercent, Math.Min(MaxZoomPercent, savedZoom.Value));
+                            // ensure internal zoom field reflects loaded value immediately
+                            _currentZoomPercent = clamped;
                             if (ZoomSlider != null)
                                 ZoomSlider.Value = clamped;
                             else
                                 ApplyGridZoom(clamped);
+                            // persist into settings service/file so other parts/read next startup
+                            try { PersistZoomToSettings(clamped); } catch { }
                         }
                         else
                         {
                             var settingsZoom = _settingsService?.HoldingsZoomPercent ?? 100.0;
                             var clamped = Math.Max(MinZoomPercent, Math.Min(MaxZoomPercent, settingsZoom));
+                            _currentZoomPercent = clamped;
                             if (ZoomSlider != null)
                                 ZoomSlider.Value = clamped;
                             else
                                 ApplyGridZoom(clamped);
+                            try { PersistZoomToSettings(clamped); } catch { }
                         }
 
                         ApplyWidthsByHeader(dict);
@@ -238,10 +247,13 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
                     {
                         var settingsZoom = _settingsService?.HoldingsZoomPercent ?? 100.0;
                         var clamped = Math.Max(MinZoomPercent, Math.Min(MaxZoomPercent, settingsZoom));
+                        // apply and record current zoom so subsequent changes persist correctly
+                        _currentZoomPercent = clamped;
                         if (ZoomSlider != null)
                             ZoomSlider.Value = clamped;
                         else
                             ApplyGridZoom(clamped);
+                        try { PersistZoomToSettings(clamped); } catch { }
                     }
                     catch { }
 
@@ -325,6 +337,7 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
             try
             {
                 ApplyGridZoom(e.NewValue);
+                try { PersistZoomToSettings(e.NewValue); } catch { }
             }
             catch { }
         }
@@ -380,11 +393,51 @@ namespace TradeMVVM.Trading.Views.HoldingsReport
         {
             try
             {
-                if (_settingsService == null)
-                    return;
+                // Try to persist into SettingsService (AppData) if available
+                try
+                {
+                    var ss = _settingsService ?? App.Services?.GetService(typeof(TradeMVVM.Trading.Services.SettingsService)) as TradeMVVM.Trading.Services.SettingsService;
+                    if (ss != null)
+                    {
+                        ss.HoldingsZoomPercent = zoomPercent;
+                        ss.Save();
+                    }
+                }
+                catch { }
 
-                _settingsService.HoldingsZoomPercent = zoomPercent;
-                _settingsService.Save();
+                // Update or create local column widths file, keeping other entries intact.
+                try
+                {
+                    List<string> lines = new List<string>();
+                    if (File.Exists(_settingsPath))
+                        lines.AddRange(File.ReadAllLines(_settingsPath));
+
+                    var zoomLine = $"{ZoomSettingsKey};{zoomPercent.ToString(CultureInfo.InvariantCulture)}";
+                    var replaced = false;
+                    for (int i = 0; i < lines.Count; i++)
+                    {
+                        if (lines[i].StartsWith(ZoomSettingsKey + ";", StringComparison.Ordinal))
+                        {
+                            lines[i] = zoomLine;
+                            replaced = true;
+                            break;
+                        }
+                    }
+                    if (!replaced)
+                        lines.Insert(0, zoomLine);
+
+                    // write back
+                    try
+                    {
+                        var dir = Path.GetDirectoryName(_settingsPath);
+                        if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                            Directory.CreateDirectory(dir);
+                    }
+                    catch { }
+
+                    File.WriteAllLines(_settingsPath, lines);
+                }
+                catch { }
             }
             catch { }
         }
