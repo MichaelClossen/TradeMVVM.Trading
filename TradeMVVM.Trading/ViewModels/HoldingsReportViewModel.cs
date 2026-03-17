@@ -605,6 +605,8 @@ namespace TradeMVVM.Trading.ViewModels
             catch { }
 
             // compute PLPercent: prefer manual override, otherwise derive from prices when possible
+            // IMPORTANT: do not overwrite a provider-supplied PLPercent from the DB — only derive
+            // when PLPercent is missing (NaN) or when the current price was manually entered.
             try
             {
                 if (row.IsPLPercentManual && !double.IsNaN(row.ManualPLPercent) && !double.IsInfinity(row.ManualPLPercent))
@@ -619,7 +621,8 @@ namespace TradeMVVM.Trading.ViewModels
                 else if (!double.IsNaN(effectivePrice) && !double.IsNaN(avgBuy) && avgBuy != 0)
                 {
                     var newPercent = Math.Round((effectivePrice - avgBuy) / avgBuy * 100.0, 2);
-                    if (double.IsNaN(row.PLPercent) || row.IsCurrentPriceManual || Math.Abs(row.PLPercent - newPercent) > 1e-9)
+                    // Only apply derived percent when no provider percent exists or when user entered a manual price.
+                    if (double.IsNaN(row.PLPercent) || row.IsCurrentPriceManual)
                     {
                         row.PLPercent = newPercent;
                         try { row.RaisePropertyChanged(nameof(HoldingsRow.PLPercent)); } catch { }

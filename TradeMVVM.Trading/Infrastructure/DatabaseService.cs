@@ -1074,7 +1074,7 @@ namespace TradeMVVM.Trading.Services
                                 ISIN = reader.GetString(0),
                                 Time = ReadDateTimeSafe(reader, 1),
                                 Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                                Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
+                                Percent = reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3),
                                 Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
                                 ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null
                             };
@@ -1216,8 +1216,8 @@ namespace TradeMVVM.Trading.Services
                             {
                                 ISIN = reader.GetString(0),
                                 Time = ReadDateTimeSafe(reader, 1),
-                                Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                                Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
+                                    Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
+                                    Percent = reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3),
                                 Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
                                 ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
                                 Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
@@ -1287,7 +1287,7 @@ namespace TradeMVVM.Trading.Services
                                         ISIN = reader.GetString(0),
                                         Time = ReadDateTimeSafe(reader, 1),
                                         Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                                        Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
+                                        Percent = reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3),
                                         Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
                                         ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
                                         Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
