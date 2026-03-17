@@ -1678,6 +1678,8 @@ namespace TradeMVVM.Trading.ViewModels
                                             row.ProviderTime = DateTime.UtcNow;
                                         var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), key, StringComparison.OrdinalIgnoreCase));
                                         ApplyDerivedFromManual_Static(row, src);
+                                        // ensure derived flag is set so UI highlights the row
+                                        try { row.IsDerivedFromManual = true; row.RaisePropertyChanged(nameof(HoldingsRow.IsDerivedFromManual)); } catch { }
                                     }
                                 }
                                 catch { }
@@ -1706,6 +1708,7 @@ namespace TradeMVVM.Trading.ViewModels
                                             row.ProviderTime = DateTime.UtcNow;
                                         var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), key, StringComparison.OrdinalIgnoreCase));
                                         ApplyDerivedFromManual_Static(row, src);
+                                        try { row.IsDerivedFromManual = true; row.RaisePropertyChanged(nameof(HoldingsRow.IsDerivedFromManual)); } catch { }
                                     }
                                 }
                                 catch { }
