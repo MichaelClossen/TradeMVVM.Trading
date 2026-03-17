@@ -1644,6 +1644,37 @@ namespace TradeMVVM.Trading.ViewModels
 
                 try { AttachThresholdHandler(Holdings.LastOrDefault()); } catch { }
 
+                // If latest provider entry for this ISIN was inserted as a manual StockPoint
+                // (Provider = 'Manual' in Prices DB), mark the row as derived from manual
+                // so the UI highlights it orange and derived values are computed.
+                try
+                {
+                    var last = Holdings.LastOrDefault();
+                    if (last != null && latestPoints.TryGetValue(h.ISIN, out var spLatest) &&
+                        !string.IsNullOrWhiteSpace(spLatest.Provider) && string.Equals(spLatest.Provider, "Manual", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // prefer storing manual price when available, otherwise manual percent
+                        if (!double.IsNaN(spLatest.Price))
+                        {
+                            last.IsCurrentPriceManual = true;
+                            last.ManualCurrentPrice = spLatest.Price;
+                        }
+
+                        if (!double.IsNaN(spLatest.Percent))
+                        {
+                            last.IsPLPercentManual = true;
+                            last.ManualPLPercent = Math.Round(spLatest.Percent, 2);
+                        }
+
+                        if (!last.ProviderTime.HasValue || last.ProviderTime.Value == default(DateTime))
+                            last.ProviderTime = spLatest.ProviderTime ?? DateTime.UtcNow;
+
+                        try { var src = _source?.FirstOrDefault(x => string.Equals(NormalizeIsin(x.ISIN), NormalizeIsin(last.ISIN), StringComparison.OrdinalIgnoreCase)); ApplyDerivedFromManual_Static(last, src); } catch { }
+                        try { last.IsDerivedFromManual = true; last.RaisePropertyChanged(nameof(HoldingsRow.IsDerivedFromManual)); } catch { }
+                    }
+                }
+                catch { }
+
                 sumRealized += double.IsNaN(realized) ? 0.0 : realized;
                 sumUnrealized += double.IsNaN(unrealized) ? 0.0 : unrealized;
                 sumTaxes += h.TotalTaxes;
