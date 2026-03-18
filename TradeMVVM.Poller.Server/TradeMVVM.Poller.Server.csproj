@@ -5,17 +5,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\TradeMVVM.Poller.Core\TradeMVVM.Poller.Core.csproj" />
-    <ProjectReference Include="..\TradeMVVM.Domain\TradeMVVM.Domain.csproj" />
-    <ProjectReference Include="..\TradeMVVM.Trading\TradeMVVM.Trading.csproj" />
-  </ItemGroup>
+  <!-- PollerCore and Domain source files live inside this project folder (PollerCore\, Domain\) and are included implicitly. -->
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
     <PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TradeMVVM.Trading\TradeMVVM.Trading.csproj" />
   </ItemGroup>
 </Project>

@@ -30,8 +30,9 @@
     <None Include="App.config" />
   </ItemGroup>
 
+  <!-- Domain types duplicated inside this project to allow full decoupling from TradeMVVM.Domain project -->
   <ItemGroup>
-    <ProjectReference Include="..\TradeMVVM.Domain\TradeMVVM.Domain.csproj" />
+    <!-- Domain files live in this project folder and are picked up automatically by SDK; no explicit include needed -->
   </ItemGroup>
 
   <ItemGroup>

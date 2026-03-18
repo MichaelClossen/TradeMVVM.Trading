@@ -2,7 +2,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using TradeMVVM.Poller.Core;
 using TradeMVVM.Trading.Services;
 using TradeMVVM.Trading.Services.Di;
 using System.Threading.Tasks;

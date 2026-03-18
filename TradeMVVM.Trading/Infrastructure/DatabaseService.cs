@@ -138,6 +138,34 @@ namespace TradeMVVM.Trading.Services
             return list;
         }
 
+        // Write a heartbeat timestamp to PollingControl table so external watchers can detect server liveness
+        public void SetHeartbeat(DateTime dt)
+        {
+            try
+            {
+                using (var conn = new SQLiteConnection(_connection))
+                {
+                    conn.Open();
+                    using (var cmd = new SQLiteCommand(@"
+                        CREATE TABLE IF NOT EXISTS PollingControl (
+                            Id INTEGER PRIMARY KEY CHECK (Id = 1),
+                            PollingEnabled INTEGER NOT NULL DEFAULT 1,
+                            LastHeartbeat DATETIME
+                        );", conn))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    using (var up = new SQLiteCommand("INSERT OR REPLACE INTO PollingControl (Id, PollingEnabled, LastHeartbeat) VALUES (1, 1, @t);", conn))
+                    {
+                        up.Parameters.AddWithValue("@t", dt.ToLocalTime().ToString("o"));
+                        up.ExecuteNonQuery();
+                    }
+                }
+            }
+            catch { }
+        }
+
         // Replace TotalPLHistory rows within [from,to] by deleting that range and inserting provided points.
         // Points should be ordered ascending.
         public void ReplaceTotalPLHistoryRange(DateTime from, DateTime to, List<Tuple<DateTime, double>> points)
