@@ -1,0 +1,82 @@
+Full scan started 2026-03-21T10:09:54.7568261Z
+ISIN=DE000HC64J94 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000HC64J94/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000HM07U97 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000HM07U97/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000HT463X3 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000HT463X3/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000PC2FTR7 price=2,43 percent=0 provider=BNP
+ISIN=DE000PC3DVW6 price=9,33 percent=0 provider=BNP
+ISIN=DE000PC8MVU0 price=7,85 percent=0 provider=BNP
+ISIN=DE000PC98FB0 price=1,48 percent=0 provider=BNP
+ISIN=DE000PD39445 price=13,83 percent=0 provider=BNP
+ISIN=DE000PD9G6E0 price=9,43 percent=0 provider=BNP
+ISIN=DE000PE7CC69 price=7,79 percent=0 provider=BNP
+ISIN=DE000PE7YY00 price=6,49 percent=0 provider=BNP
+ISIN=DE000PE96JN7 price=14,66 percent=0 provider=BNP
+ISIN=DE000PE96JP2 price=15,23 percent=0 provider=BNP
+ISIN=DE000PF07XU7 price=7,97 percent=0 provider=BNP
+ISIN=DE000PF0X5R7 price=10,25 percent=0 provider=BNP
+ISIN=DE000PF2UN41 price=1,98 percent=0 provider=BNP
+ISIN=DE000PF4HEP2 price=19,14 percent=0 provider=BNP
+ISIN=DE000PG03ZC7 price=1,22 percent=0 provider=BNP
+ISIN=DE000PG03ZE3 price=1,32 percent=0 provider=BNP
+ISIN=DE000PG0WJV5 price=0,52 percent=0 provider=BNP
+ISIN=DE000PG0WPX8 price=3,37 percent=0 provider=BNP
+ISIN=DE000PG15BV2 price=5,39 percent=0 provider=BNP
+ISIN=DE000PG161G3 price=1,24 percent=0 provider=BNP
+ISIN=DE000PG171L2 price=4,39 percent=0 provider=BNP
+ISIN=DE000PG20PJ7 price=4,62 percent=0 provider=BNP
+ISIN=DE000PG2Y408 price=9,9 percent=0 provider=BNP
+ISIN=DE000PG3DLG6 price=6,07 percent=0 provider=BNP
+ISIN=DE000PG3K3V4 price=15,35 percent=0 provider=BNP
+ISIN=DE000PG3MWD1 price=2,66 percent=0 provider=BNP
+ISIN=DE000PG3XPN1 price=3,21 percent=0 provider=BNP
+ISIN=DE000PH1JZN2 price=10,42 percent=0 provider=BNP
+ISIN=DE000PH5X4P5 price=1,83 percent=0 provider=BNP
+ISIN=DE000PH88FT2 price=6,78 percent=0 provider=BNP
+ISIN=DE000PJ01SA4 price=2,42 percent=0 provider=BNP
+ISIN=DE000PJ0T1L7 price=9,13 percent=0 provider=BNP
+ISIN=DE000PJ0UAX1 price=46,2 percent=0 provider=BNP
+ISIN=DE000PJ1E1W0 price=19,61 percent=0 provider=BNP
+ISIN=DE000PJ1GAU4 price=36,72 percent=0 provider=BNP
+ISIN=DE000PJ1N566 price=7,34 percent=0 provider=BNP
+ISIN=DE000PJ23XE0 price=2,04 percent=0 provider=BNP
+ISIN=DE000PJ33K43 price=2,04 percent=0 provider=BNP
+ISIN=DE000PJ38QJ1 price=2,89 percent=0 provider=BNP
+ISIN=DE000PJ39426 price=8,63 percent=0 provider=BNP
+ISIN=DE000PJ3MNC9 price=4,69 percent=0 provider=BNP
+ISIN=DE000PJ3TRJ0 price=6,01 percent=0 provider=BNP
+ISIN=DE000PJ51QW7 price=4,4 percent=0 provider=BNP
+ISIN=DE000PJ5EC68 price=0,87 percent=0 provider=BNP
+ISIN=DE000PJ60ZJ6 price=3,69 percent=0 provider=BNP
+ISIN=DE000PJ6MQ87 price=3,49 percent=0 provider=BNP
+ISIN=DE000PJ6V1E2 price=8,63 percent=0 provider=BNP
+ISIN=DE000PJ7J0N0 price=2,66 percent=0 provider=BNP
+ISIN=DE000PJ80X57 price=16,32 percent=0 provider=BNP
+ISIN=DE000PJ83W63 price=4,91 percent=0 provider=BNP
+ISIN=DE000PK1HGV4 price=19,9 percent=0 provider=BNP
+ISIN=DE000PK36NK8 price=21,81 percent=0 provider=BNP
+ISIN=DE000PK3CE68 price=5,43 percent=0 provider=BNP
+ISIN=DE000PK3R5R2 price=1,72 percent=0 provider=BNP
+ISIN=DE000PK4WYF3 price=2,25 percent=0 provider=BNP
+ISIN=DE000PK5QAE5 price=16,82 percent=0 provider=BNP
+ISIN=DE000PK6F8Y3 price=1,03 percent=0 provider=BNP
+ISIN=DE000PL0WJF1 price=2,72 percent=0 provider=BNP
+ISIN=DE000PN1CBG4 price=8,86 percent=0 provider=BNP
+ISIN=DE000PN2W9V4 price=6,48 percent=0 provider=BNP
+ISIN=DE000PN97SJ5 price=3,02 percent=0 provider=BNP
+ISIN=DE000PZ1KK86 price=4,59 percent=0 provider=BNP
+ISIN=DE000TT1QZR0 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000TT1QZR0/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=DE000UG5RD76 price=NaN percent=NaN provider=BNP
+BNP_FAIL no response
+GETTEX_OK https://www.gettex.de/aktie/DE000UG5RD76/ snippet=<!DOCTYPE html> <html lang="de"> <head>  <meta charset="utf-8"> <!--  	This website is powered by TYPO3 - inspiring people to share! 	TYPO3 is a free open source Content Management Framework initially created by Kasper Skaarhoj and licensed under GNU/GPL. 	TYPO3 is copyright 1998-2026 of Kasper Skaarhoj. Extensions are copyright of their respective owners. 	Information and contribution at https://typo3.org/ -->   <link rel="icon" href="/_assets/855c6689f7a337bb845f6a4066e73fe1/Icons/favicon.ico" type="image/vnd.microsoft.icon"> <title>{BID} | {ASK} | {NAME} | {WKN} | Aktien schnell &amp; günstig auf gettex handeln</title> <meta http-equiv="x-ua-compatible" content="IE=edge"> <meta name="generator" content="TYPO3 CMS"> <meta name="description" content="Realtime {NAME} Aktienkurs (WKN: {WKN}): ✓ Charts ✓ aktuelle News &amp; Analysen ✓ Kennzahlen – günstig auf gettex handeln"> <meta name="viewport" content="width=device-width, initial-scale=1"> <meta name="robots" content="index,follow"> 
+ISIN=FR0010717090 price=190,18 percent=-0,26 provider=Gettex
+ISIN=IE00002ZKAP0 price=NaN percent=NaN provider=Gettex
+Full scan finished 2026-03-21T10:11:16.3628256Z elapsed=00:01:22.7838501
+Checked=69 Failed=6

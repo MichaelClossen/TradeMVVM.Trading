@@ -351,9 +351,14 @@ namespace TradeMVVM.Trading.ViewModels
                         // source of truth is used (avoid writing to a hard-coded trading.db file)
                         try
                         {
-                            var db = new TradeMVVM.Trading.Services.DatabaseService();
-                            // Persist unrealized PL only to match ChartsView top-plot (sum of unrealized values)
+                        var db = new TradeMVVM.Trading.Services.DatabaseService();
+                        // Persist unrealized PL only to match ChartsView top-plot (sum of unrealized values)
+                        // Avoid inserting occasional incorrect zero values caused by uninitialized
+                        // or transient state: only persist when the value is finite and non-zero.
+                        if (!double.IsNaN(TotalUnrealizedPL) && !double.IsInfinity(TotalUnrealizedPL) && Math.Abs(TotalUnrealizedPL) > 1e-9)
+                        {
                             db.InsertTotalPLHistory(DateTime.UtcNow, TotalUnrealizedPL);
+                        }
                         }
                         catch { }
                     }
@@ -604,9 +609,7 @@ namespace TradeMVVM.Trading.ViewModels
             }
             catch { }
 
-            // compute PLPercent: prefer manual override, otherwise derive from prices when possible
-            // IMPORTANT: do not overwrite a provider-supplied PLPercent from the DB — only derive
-            // when PLPercent is missing (NaN) or when the current price was manually entered.
+            // compute PLPercent: prefer manual override; otherwise derive only when PLPercent is missing
             try
             {
                 if (row.IsPLPercentManual && !double.IsNaN(row.ManualPLPercent) && !double.IsInfinity(row.ManualPLPercent))
@@ -618,11 +621,10 @@ namespace TradeMVVM.Trading.ViewModels
                         derived = true;
                     }
                 }
-                else if (!double.IsNaN(effectivePrice) && !double.IsNaN(avgBuy) && avgBuy != 0)
+                else if (!row.IsPLPercentManual && double.IsNaN(row.PLPercent) && !double.IsNaN(effectivePrice) && !double.IsNaN(avgBuy) && avgBuy != 0)
                 {
                     var newPercent = Math.Round((effectivePrice - avgBuy) / avgBuy * 100.0, 2);
-                    // Only apply derived percent when no provider percent exists or when user entered a manual price.
-                    if (double.IsNaN(row.PLPercent) || row.IsCurrentPriceManual)
+                    if (double.IsNaN(row.PLPercent) || Math.Abs(row.PLPercent - newPercent) > 1e-9)
                     {
                         row.PLPercent = newPercent;
                         try { row.RaisePropertyChanged(nameof(HoldingsRow.PLPercent)); } catch { }
@@ -1164,9 +1166,12 @@ namespace TradeMVVM.Trading.ViewModels
                             continue;
 
                         var avgBuy = h.RemainingBoughtShares > 0 ? h.RemainingBoughtAmount / h.RemainingBoughtShares : double.NaN;
+                        // PL% should be taken from the DB/provider and not computed in the GUI
                         double plPercent = double.NaN;
                         if (latestPoints.TryGetValue(h.ISIN, out var spProv))
+                        {
                             plPercent = spProv.Percent;
+                        }
 
                         var trailingVals = GetTrailingStopValues(h.ISIN);
                         var trailingConfigured = trailingVals.configured;
@@ -1555,11 +1560,21 @@ namespace TradeMVVM.Trading.ViewModels
                 var mvKaufNative = !double.IsNaN(avgBuy) ? h.Shares * avgBuy : h.MarketValue;
                 var mvEur = converter.ConvertToEur(mvKaufNative, h.Currency);
 
-                // determine PL percent: use percent provided by the data provider (latest DB point)
+                // determine PL percent: prefer percent computed against the holding's average buy price (realized/unrealized %),
+                // otherwise fall back to the percent reported by the data provider (change vs. previous/close)
                 double plPercent = double.NaN;
+                double providerPercent = double.NaN;
+                double providerPrice = double.NaN;
                 if (latestPoints.TryGetValue(h.ISIN, out var spProvider))
                 {
-                    plPercent = spProvider.Percent;
+                    providerPercent = spProvider.Percent;
+                    providerPrice = spProvider.Price;
+                }
+
+                // Do not recompute PL% in the GUI — always prefer the provider/DB percent when available.
+                if (!double.IsNaN(providerPercent))
+                {
+                    plPercent = providerPercent;
                 }
 
                 var trailingVals = GetTrailingStopValues(h.ISIN);

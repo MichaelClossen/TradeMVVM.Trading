@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
+using TradeMVVM.Poller.Core;
 using TradeMVVM.Domain;
 using TradeMVVM.Trading.Services;
 using TradeMVVM.Trading.DataAnalysis;
@@ -25,25 +26,6 @@ internal class PollerBackgroundService : BackgroundService
         _provider = provider;
         _repo = repo;
         _http = http ?? new HttpClient();
-    }
-
-    // Helper to run fire-and-forget tasks without CS4014 warnings and to observe/log exceptions.
-    private void FireAndForget(Task task)
-    {
-        if (task == null) return;
-        task.ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-            {
-                try
-                {
-                    var logger = _logger;
-                    if (logger != null && t.Exception != null)
-                        logger.LogDebug(t.Exception, "Background fire-and-forget task faulted");
-                }
-                catch { }
-            }
-        }, TaskScheduler.Default);
     }
 
 // Helper: sanitize holdings dictionary produced by HoldingsCalculator to skip malformed/empty entries
@@ -212,19 +194,19 @@ static class PollerHelpers
         _logger.LogInformation("PollerBackgroundService starting");
 
         // Write an initial heartbeat immediately so the GUI can detect the server quickly.
-            try
-            {
-                var dbInit = new TradeMVVM.Trading.Services.DatabaseService();
-                try { dbInit.SetHeartbeat(DateTime.Now); } catch { }
-                try { Console.WriteLine($"Poller initial heartbeat (local): {DateTime.Now.ToString("o")} "); } catch { }
-            }
-            catch { }
+        try
+        {
+            var dbInit = new TradeMVVM.Poller.Core.DatabaseService();
+            try { dbInit.SetHeartbeat(DateTime.Now); } catch { }
+            try { Console.WriteLine($"Poller initial heartbeat (local): {DateTime.Now.ToString("o")} "); } catch { }
+        }
+        catch { }
 
         // Start a background heartbeat updater so the GUI sees the server as running quickly
-            try
-            {
-                var hbDb = new TradeMVVM.Trading.Services.DatabaseService();
-                FireAndForget(Task.Run(async () =>
+        try
+        {
+            var hbDb = new TradeMVVM.Poller.Core.DatabaseService();
+            Task.Run(async () =>
             {
                 try
                 {
@@ -235,7 +217,7 @@ static class PollerHelpers
                             var nowUtc = DateTime.UtcNow;
                             hbDb.SetHeartbeat(nowUtc);
                             // also compute and persist Total P/L on every heartbeat (fire-and-forget)
-                            try { FireAndForget(ComputeAndInsertTotalPlAsync(stoppingToken)); } catch { }
+                            try { _ = ComputeAndInsertTotalPlAsync(stoppingToken); } catch { }
                             try { Console.WriteLine($"Poller heartbeat (local): {DateTime.Now.ToString("o")} "); } catch { }
                         }
                         catch (OperationCanceledException)
@@ -266,7 +248,7 @@ static class PollerHelpers
                 {
                     try { _logger?.LogWarning(ex, "Heartbeat background task failed"); } catch { }
                 }
-            }, stoppingToken));
+            }, stoppingToken);
         }
         catch (Exception ex)
         {
@@ -276,7 +258,7 @@ static class PollerHelpers
         // Start a background task to compute Total P/L and persist it to TotalPLHistory every 10s.
         try
         {
-            FireAndForget(Task.Run(async () =>
+            Task.Run(async () =>
             {
                 try
                 {
@@ -377,7 +359,7 @@ static class PollerHelpers
                 {
                     try { _logger?.LogWarning(ex, "TotalPL background task failed"); } catch { }
                 }
-            }, stoppingToken));
+            }, stoppingToken);
         }
         catch (Exception ex)
         {
@@ -387,7 +369,7 @@ static class PollerHelpers
         // Kick off self-test and full-scan in background so they do not block the main polling loop or heartbeat.
         try
         {
-            FireAndForget(Task.Run(async () =>
+            Task.Run(async () =>
             {
                 try
                 {
@@ -408,7 +390,7 @@ static class PollerHelpers
                 {
                     try { _logger.LogWarning(ex, "RunFullScanAsync failed"); } catch { }
                 }
-            }, stoppingToken));
+            }, stoppingToken);
         }
         catch { }
 
@@ -462,7 +444,7 @@ static class PollerHelpers
         // and updates the shared `stocks` list under lock so the polling service can pick up changes.
         try
         {
-                    FireAndForget(Task.Run(async () =>
+            Task.Run(async () =>
             {
                 while (!stoppingToken.IsCancellationRequested)
                 {
@@ -500,7 +482,7 @@ static class PollerHelpers
 
                     try { await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken).ConfigureAwait(false); } catch { break; }
                 }
-            }, stoppingToken));
+            }, stoppingToken);
         }
         catch { }
 
@@ -516,43 +498,30 @@ static class PollerHelpers
         //    try { _logger.LogWarning(ex, "BackfillPercentWhereZero failed"); } catch { }
         //}
 
-        // resilient polling loop: if the polling workers exit unexpectedly, restart them
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            // run polling loop using two staggered workers (same pattern as GUI Start)
+            const int workerCount = 2;
+            var t1 = service.StartAsync(stocks, stoppingToken, workerIndex: 0, workerCount: workerCount);
+            var t2 = Task.Run(async () =>
             {
-                const int workerCount = 2;
-                var t1 = service.StartAsync(stocks, stoppingToken, workerIndex: 0, workerCount: workerCount);
+                try { await Task.Delay(1500, stoppingToken).ConfigureAwait(false); } catch { }
+                if (stoppingToken.IsCancellationRequested) return;
+                await service.StartAsync(stocks, stoppingToken, workerIndex: 1, workerCount: workerCount).ConfigureAwait(false);
+            }, stoppingToken);
 
-                // start second worker staggered
-                FireAndForget(Task.Run(async () =>
-                {
-                    try { await Task.Delay(1500, stoppingToken).ConfigureAwait(false); } catch { }
-                    if (stoppingToken.IsCancellationRequested) return;
-                    await service.StartAsync(stocks, stoppingToken, workerIndex: 1, workerCount: workerCount).ConfigureAwait(false);
-                }, stoppingToken));
-
-                var t2 = Task.CompletedTask;
-
-                await Task.WhenAll(t1, t2).ConfigureAwait(false);
-
-                // If we reach here, both workers completed without cancellation — log and restart after a short delay
-                try { _logger?.LogWarning("PollerBackgroundService: polling workers exited unexpectedly, restarting"); } catch { }
-                try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false); } catch { }
-            }
-            catch (OperationCanceledException)
-            {
-                // shutdown requested -> exit loop
-                break;
-            }
-            catch (Exception ex)
-            {
-                try { _logger?.LogError(ex, "PollerBackgroundService crashed during polling loop, will restart"); } catch { }
-                try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false); } catch { }
-            }
+            await Task.WhenAll(t1, t2).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // expected on shutdown
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "PollerBackgroundService crashed");
         }
 
-        try { _logger?.LogInformation("PollerBackgroundService stopping"); } catch { }
+        _logger.LogInformation("PollerBackgroundService stopping");
     }
 
     // helper: run a small self-test of providers and HTTP fetches

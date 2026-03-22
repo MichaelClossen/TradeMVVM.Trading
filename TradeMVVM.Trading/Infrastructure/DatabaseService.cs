@@ -138,34 +138,6 @@ namespace TradeMVVM.Trading.Services
             return list;
         }
 
-        // Write a heartbeat timestamp to PollingControl table so external watchers can detect server liveness
-        public void SetHeartbeat(DateTime dt)
-        {
-            try
-            {
-                using (var conn = new SQLiteConnection(_connection))
-                {
-                    conn.Open();
-                    using (var cmd = new SQLiteCommand(@"
-                        CREATE TABLE IF NOT EXISTS PollingControl (
-                            Id INTEGER PRIMARY KEY CHECK (Id = 1),
-                            PollingEnabled INTEGER NOT NULL DEFAULT 1,
-                            LastHeartbeat DATETIME
-                        );", conn))
-                    {
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    using (var up = new SQLiteCommand("INSERT OR REPLACE INTO PollingControl (Id, PollingEnabled, LastHeartbeat) VALUES (1, 1, @t);", conn))
-                    {
-                        up.Parameters.AddWithValue("@t", dt.ToLocalTime().ToString("o"));
-                        up.ExecuteNonQuery();
-                    }
-                }
-            }
-            catch { }
-        }
-
         // Replace TotalPLHistory rows within [from,to] by deleting that range and inserting provided points.
         // Points should be ordered ascending.
         public void ReplaceTotalPLHistoryRange(DateTime from, DateTime to, List<Tuple<DateTime, double>> points)
@@ -1102,7 +1074,7 @@ namespace TradeMVVM.Trading.Services
                                 ISIN = reader.GetString(0),
                                 Time = ReadDateTimeSafe(reader, 1),
                                 Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                                Percent = reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3),
+                                Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
                                 Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
                                 ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null
                             };
@@ -1244,8 +1216,8 @@ namespace TradeMVVM.Trading.Services
                             {
                                 ISIN = reader.GetString(0),
                                 Time = ReadDateTimeSafe(reader, 1),
-                                    Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                                    Percent = reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3),
+                                Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
+                                Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
                                 Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
                                 ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
                                 Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,
@@ -1315,7 +1287,7 @@ namespace TradeMVVM.Trading.Services
                                         ISIN = reader.GetString(0),
                                         Time = ReadDateTimeSafe(reader, 1),
                                         Price = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
-                                        Percent = reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3),
+                                        Percent = reader.IsDBNull(3) ? 0 : reader.GetDouble(3),
                                         Provider = reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : string.Empty,
                                         ProviderTime = reader.FieldCount > 5 && !reader.IsDBNull(5) ? ReadNullableDateTime(reader, 5) : null,
                                         Forecast = reader.FieldCount > 6 && !reader.IsDBNull(6) ? reader.GetString(6) : string.Empty,

@@ -131,24 +131,25 @@ public class PricePollingService : IDisposable
 
             try
             {
-                // Use latest database value instead of live HTTP/provider call in GUI.
-                // This avoids any network access from the GUI layer.
-                var rows = _repository.LoadByIsin(s.isin);
-                if (rows != null && rows.Count > 0)
-                {
-                    var last = rows[rows.Count - 1];
-                    result = (last.Price, last.Percent, last.Provider ?? "DB", last.Time);
-                }
-                else
-                {
-                    // no data available in DB for this ISIN
-                    result = (double.NaN, double.NaN, "DB", null);
-                }
+                using var perIsinCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                perIsinCts.CancelAfter(_perIsinTimeout);
+
+                // one deterministic provider run per cycle (preferred provider first + fallback inside DataProvider)
+                var name = s.name;
+                result = await _provider.DataProvider(s.isin, s.type, name, perIsinCts.Token);
                 success = true;
+            }
+            catch (OperationCanceledException)
+            {
+                if (token.IsCancellationRequested)
+                    return;
+
+                Debug.WriteLine($"PricePolling: timeout after {_perIsinTimeout.TotalSeconds}s for {s.isin}");
+                return;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"PricePolling: DB fetch failed for {s.isin}: {ex.Message}");
+                Debug.WriteLine($"PricePolling: failed for {s.isin}: {ex}");
                 return;
             }
 
