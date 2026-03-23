@@ -72,6 +72,79 @@ partial class Program
             }
         }
 
+
+        // Return the integer Id of the active CSV row (NEW_CSV_ACTIVE.Id) or null if none.
+        // Ensure NEW_CSV_ACTIVE has an Id INTEGER PRIMARY KEY AUTOINCREMENT by performing
+        // a best-effort migration when the column is missing.
+        public static int? GetActiveCsvRowIdFromDb(string dbPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return null;
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            conn.Open();
+
+            // Ensure table exists and has Id column. If not, attempt migration to a new table
+            // with an AUTOINCREMENT Id and copy CSV/Active/Created columns.
+            try
+            {
+                var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (var p = conn.CreateCommand())
+                {
+                    p.CommandText = "PRAGMA table_info(NEW_CSV_ACTIVE);";
+                    using var r = p.ExecuteReader();
+                    while (r.Read()) cols.Add(r.GetString(1));
+                }
+
+                if (!cols.Contains("Id"))
+                {
+                    try
+                    {
+                        using var tx = conn.BeginTransaction();
+                        using var c1 = conn.CreateCommand();
+                        c1.CommandText = @"
+CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE_new (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CSV TEXT,
+    Active INTEGER,
+    Created TEXT
+);";
+                        c1.ExecuteNonQuery();
+
+                        using var c2 = conn.CreateCommand();
+                        c2.CommandText = @"INSERT INTO NEW_CSV_ACTIVE_new (CSV, Active, Created)
+SELECT CSV, Active, Created FROM NEW_CSV_ACTIVE;";
+                        try { c2.ExecuteNonQuery(); } catch { }
+
+                        using var c3 = conn.CreateCommand();
+                        c3.CommandText = "DROP TABLE IF EXISTS NEW_CSV_ACTIVE;";
+                        c3.ExecuteNonQuery();
+
+                        using var c4 = conn.CreateCommand();
+                        c4.CommandText = "ALTER TABLE NEW_CSV_ACTIVE_new RENAME TO NEW_CSV_ACTIVE;";
+                        c4.ExecuteNonQuery();
+
+                        tx.Commit();
+                    }
+                    catch { /* migration failed - continue and try to query anyway */ }
+                }
+            }
+            catch { }
+
+            try
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT Id FROM NEW_CSV_ACTIVE WHERE Active = 1 ORDER BY Created DESC LIMIT 1;";
+                var res = cmd.ExecuteScalar();
+                if (res == null || res == DBNull.Value) return null;
+                try { return Convert.ToInt32(res, CultureInfo.InvariantCulture); } catch { return null; }
+            }
+            catch { return null; }
+        }
+        catch { return null; }
+    }
+              
         public static void QuitDriver()
         {
             lock (sync)
@@ -2725,13 +2798,21 @@ CREATE TABLE IF NOT EXISTS NEW_TotalValues (
             catch { }
 
             // derive CSV identifier to store in NEW_TotalValues
-            // Only store the active CSV id from NEW_CSV_ACTIVE to save space — do NOT store full filename
+            // Instead of storing the CSV name/path, store the integer Id from NEW_CSV_ACTIVE.Id
+            // (authoritative source). If no active id available, store NULL/empty.
             var csvName = string.Empty;
             try
             {
-                var activeId = GetActiveCsvIdFromDb(dbPath);
-                if (!string.IsNullOrWhiteSpace(activeId)) csvName = activeId;
-                else csvName = string.Empty; // intentionally avoid storing filename here to save DB space
+                var activeRowId = SharedBrowser.GetActiveCsvRowIdFromDb(dbPath);
+                if (activeRowId.HasValue)
+                {
+                    // keep column type TEXT for compatibility, store numeric id as string
+                    csvName = activeRowId.Value.ToString(CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    csvName = string.Empty;
+                }
             }
             catch { csvName = string.Empty; }
 
