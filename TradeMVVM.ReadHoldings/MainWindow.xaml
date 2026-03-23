@@ -5,17 +5,34 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:TradeMVVM.ReadHoldings"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
+        Title="MainWindow" Height="450" Width="800"   MinWidth="520">
 
     <Grid>
-        <Grid.ColumnDefinitions>
-            <!-- Make left column size to its content (the DataGrid) so the splitter aligns to the last column -->
-            <ColumnDefinition x:Name="ColLeft" MinWidth="300" />
+        <!--<Grid.ColumnDefinitions>
+            --><!-- Make left column size to its content (the DataGrid) so the splitter aligns to the last column --><!--
+            <ColumnDefinition x:Name="ColLeft" Width="*" MinWidth="300" />
             <ColumnDefinition Width="8" />
-            <!-- right column takes remaining space (ensure minimum so inner splitter is visible) -->
-            <ColumnDefinition x:Name="ColRight" Width="*" MinWidth="300" />
-        </Grid.ColumnDefinitions>
+            --><!-- right column takes remaining space (ensure minimum so inner splitter is visible) --><!--
+            <ColumnDefinition x:Name="ColRight" Width="*" MinWidth="80" />
+            <ColumnDefinition Width="8" />
+            <ColumnDefinition x:Name="ColRightRight"  Width="*" MinWidth="80" />
+        </Grid.ColumnDefinitions>-->
+        <Grid.ColumnDefinitions>
 
+            <!-- Links -->
+            <ColumnDefinition x:Name="ColLeft"
+                      Width="Auto"
+                      MinWidth="300"
+                              MaxWidth="1010"/>
+
+            <ColumnDefinition Width="8"/>
+
+            <!-- Mitte -->
+            <ColumnDefinition x:Name="ColRight" Width="*"/>
+
+           
+
+        </Grid.ColumnDefinitions>
         <!-- Left: controls above holdings table -->
         <Grid Grid.Column="0" Margin="8">
             <Grid.RowDefinitions>
@@ -43,87 +60,95 @@
                 <TextBlock Name="TxtInfo" Margin="0,0,0,6" Text="" />
                 <!-- summary removed: numbers above the list disabled -->
             </StackPanel>
-            <DataGrid Name="DgHoldings" Grid.Row="1" AutoGenerateColumns="False" VerticalAlignment="Stretch" HorizontalAlignment="Left" CanUserAddRows="False">
-                <DataGrid.LayoutTransform>
-                    <ScaleTransform x:Name="DgScale" ScaleX="1" ScaleY="1" />
-                </DataGrid.LayoutTransform>
+            <DataGrid Name="DgHoldings" Grid.Row="1" AutoGenerateColumns="False" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" CanUserAddRows="False"  >
+
+                <DataGrid.RenderTransform>
+                    <ScaleTransform x:Name="DgScale"
+                    ScaleX="1"
+                    ScaleY="1" />
+                </DataGrid.RenderTransform>
+
+                <DataGrid.RenderTransformOrigin>
+                    0,0
+                </DataGrid.RenderTransformOrigin>
+
                 <DataGrid.ColumnHeaderStyle>
                     <Style TargetType="DataGridColumnHeader">
                         <Setter Property="FontWeight" Value="Bold" />
                     </Style>
                 </DataGrid.ColumnHeaderStyle>
                 <DataGrid.Columns>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Isin}">
+                    <DataGridTextColumn Binding="{Binding Isin}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="ISIN" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Name}">
+                    <DataGridTextColumn Binding="{Binding Name}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Name" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Trail, StringFormat=N2}">
+                    <DataGridTextColumn Binding="{Binding Trail, StringFormat=N2}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Trail" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Shares, StringFormat='{}{0:0}'}">
+                    <DataGridTextColumn  Binding="{Binding Shares, StringFormat='{}{0:0}'}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="#" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding AvgBuyPrice, StringFormat=N2}">
+                    <DataGridTextColumn Binding="{Binding AvgBuyPrice, StringFormat=N2}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Ø Buy" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding TotalValue, StringFormat=N2}">
+                    <DataGridTextColumn Binding="{Binding TotalValue, StringFormat=N2}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Ø Gesamtwert" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Percent, StringFormat=N2}">
+                    <DataGridTextColumn  Binding="{Binding Percent, StringFormat=N2}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="%" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding PurchaseValue, StringFormat=N2}">
+                    <DataGridTextColumn Binding="{Binding PurchaseValue, StringFormat=N2}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Buy" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding TodayValue, StringFormat=N2}">
+                    <DataGridTextColumn  Binding="{Binding TodayValue, StringFormat=N2}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Gesamtwert" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Provider}">
+                    <DataGridTextColumn  Binding="{Binding Provider}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Provider" /><LineBreak /><Run Text=" " />
                             </TextBlock>
                         </DataGridTextColumn.Header>
                     </DataGridTextColumn>
-                    <DataGridTextColumn Width="SizeToCells" Binding="{Binding Updated, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}">
+                    <DataGridTextColumn Binding="{Binding Updated, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}">
                         <DataGridTextColumn.Header>
                             <TextBlock>
                                 <Run Text="Updated" /><LineBreak /><Run Text=" " />
@@ -135,29 +160,12 @@
         </Grid>
 
         <!-- Splitter -->
-        <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#FFDDDDDD" ShowsPreview="True" ResizeBehavior="PreviousAndNext" />
-
-        <!-- Right: spare area subdivided by an additional vertical splitter -->
-        <Grid Grid.Column="2" MinWidth="600">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="Bereich1" Width="*" MinWidth="80" />
-                <ColumnDefinition Width="8" />
-                <ColumnDefinition x:Name="Bereich2" Width="*" MinWidth="80" />
-            </Grid.ColumnDefinitions>
-
-            <!-- Left part of the right area (give light background so splitter is visible) -->
-            <Border Grid.Column="0" Background="#FFFFddFF">
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666">Rechts - Bereich 1</TextBlock>
-            </Border>
-
-            <!-- inner vertical splitter dividing the right area into two panes -->
-            <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Center" VerticalAlignment="Stretch"
-                          Background="#FFDDDDDD" ShowsPreview="True" ResizeBehavior="PreviousAndNext" Cursor="SizeWE" />
-
-            <!-- Rightmost part of the right area (give light background so splitter is visible) -->
-            <Border Grid.Column="2" Background="#FFbFFF">
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"  Foreground="#FF666666">Rechts - Bereich 2</TextBlock>
-            </Border>
-        </Grid>
+        <GridSplitter    Grid.Column="1" Width="8" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ShowsPreview="True"/>
+        
+        <Border Grid.Column="2" Background="#FFFFddFF">
+            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 1</TextBlock>
+        </Border>
+        
+     
     </Grid>
 </Window>
