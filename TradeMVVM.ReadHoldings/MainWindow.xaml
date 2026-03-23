@@ -10,10 +10,10 @@
     <Grid>
         <Grid.ColumnDefinitions>
             <!-- Make left column size to its content (the DataGrid) so the splitter aligns to the last column -->
-            <ColumnDefinition x:Name="ColLeft" Width="Auto" />
+            <ColumnDefinition x:Name="ColLeft" MinWidth="300" />
             <ColumnDefinition Width="8" />
-            <!-- right column takes remaining space -->
-            <ColumnDefinition x:Name="ColRight" Width="*" />
+            <!-- right column takes remaining space (ensure minimum so inner splitter is visible) -->
+            <ColumnDefinition x:Name="ColRight" Width="*" MinWidth="300" />
         </Grid.ColumnDefinitions>
 
         <!-- Left: controls above holdings table -->
@@ -137,7 +137,27 @@
         <!-- Splitter -->
         <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#FFDDDDDD" ShowsPreview="True" ResizeBehavior="PreviousAndNext" />
 
-        <!-- Right: spare area (empty) -->
-        <Border Grid.Column="2" Background="Transparent" />
+        <!-- Right: spare area subdivided by an additional vertical splitter -->
+        <Grid Grid.Column="2" MinWidth="600">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="80" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="*" MinWidth="80" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left part of the right area (give light background so splitter is visible) -->
+            <Border Grid.Column="0" Background="#FFFFddFF">
+                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666">Rechts - Bereich 1</TextBlock>
+            </Border>
+
+            <!-- inner vertical splitter dividing the right area into two panes -->
+            <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                          Background="#FFDDDDDD" ShowsPreview="True" ResizeBehavior="PreviousAndNext" Cursor="SizeWE" />
+
+            <!-- Rightmost part of the right area (give light background so splitter is visible) -->
+            <Border Grid.Column="2" Background="#FFbFFF">
+                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"  Foreground="#FF666666">Rechts - Bereich 2</TextBlock>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
