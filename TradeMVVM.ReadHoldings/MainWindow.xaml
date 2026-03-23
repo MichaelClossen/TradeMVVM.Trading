@@ -140,9 +140,9 @@
         <!-- Right: spare area subdivided by an additional vertical splitter -->
         <Grid Grid.Column="2" MinWidth="600">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="80" />
+                <ColumnDefinition x:Name="Bereich1" Width="*" MinWidth="80" />
                 <ColumnDefinition Width="8" />
-                <ColumnDefinition Width="*" MinWidth="80" />
+                <ColumnDefinition x:Name="Bereich2" Width="*" MinWidth="80" />
             </Grid.ColumnDefinitions>
 
             <!-- Left part of the right area (give light background so splitter is visible) -->

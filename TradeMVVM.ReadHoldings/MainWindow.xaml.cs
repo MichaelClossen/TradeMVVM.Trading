@@ -888,6 +888,14 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
                 if (root.TryGetProperty("Left", out var jl) && jl.ValueKind == JsonValueKind.Number) this.Left = jl.GetDouble();
                 if (root.TryGetProperty("Top", out var jt) && jt.ValueKind == JsonValueKind.Number) this.Top = jt.GetDouble();
                 if (root.TryGetProperty("ColRightWidth", out var jcr) && jcr.ValueKind == JsonValueKind.Number) ColRight.Width = new System.Windows.GridLength(jcr.GetDouble());
+                if (root.TryGetProperty("Bereich1Width", out var b1) && b1.ValueKind == JsonValueKind.Number)
+                {
+                    try { Bereich1.Width = new System.Windows.GridLength(b1.GetDouble()); } catch { }
+                }
+                if (root.TryGetProperty("Bereich2Width", out var b2) && b2.ValueKind == JsonValueKind.Number)
+                {
+                    try { Bereich2.Width = new System.Windows.GridLength(b2.GetDouble()); } catch { }
+                }
                 if (root.TryGetProperty("Zoom", out var jz) && jz.ValueKind == JsonValueKind.Number) {
                     try { _zoom = jz.GetDouble(); if (DgScale != null) { DgScale.ScaleX = _zoom; DgScale.ScaleY = _zoom; } else { DgHoldings.FontSize = _baseFontSize * _zoom; } } catch { }
                 }
@@ -915,6 +923,8 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
                     Left = this.Left,
                     Top = this.Top,
                     ColRightWidth = ColRight.Width.Value,
+                    Bereich1Width = (Bereich1 != null ? Bereich1.Width.Value : 0.0),
+                    Bereich2Width = (Bereich2 != null ? Bereich2.Width.Value : 0.0),
                     Zoom = _zoom,
                     LastCsvPath = TxtPath?.Text ?? string.Empty
                 };
