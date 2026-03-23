@@ -322,6 +322,14 @@ namespace TradeMVVM.Trading.ViewModels
             _csvPath = csvPath;
 
             try { LoadIsinAlertThresholds(); } catch { }
+            // record active CSV in DB so scanner/aggregates know which file is active
+            try
+            {
+                var db = new TradeMVVM.Trading.Services.DatabaseService();
+                try { db.EnsureNewCsvActiveTable(); } catch { }
+                try { db.SetActiveCsv(_csvPath); } catch { }
+            }
+            catch { }
 
             // localize headers/labels if needed in future
 
@@ -1124,6 +1132,15 @@ namespace TradeMVVM.Trading.ViewModels
             if (isins == null || isins.Count == 0)
             {
                 // fallback: trigger full refresh (async)
+                // Replace NEW_Holdings with the ISINs from the loaded CSV to ensure exact match
+                try
+                {
+                    var db = new TradeMVVM.Trading.Services.DatabaseService();
+                    try { db.RecreateNewHoldingsTable(); } catch { }
+                    try { db.ReplaceNewHoldingsWithIsins(_source.Select(s => s.ISIN).Where(i => !string.IsNullOrWhiteSpace(i)).Distinct(StringComparer.OrdinalIgnoreCase)); } catch { }
+                }
+                catch { }
+
                 Refresh();
                 return;
             }
@@ -1981,12 +1998,21 @@ namespace TradeMVVM.Trading.ViewModels
                 if (string.IsNullOrWhiteSpace(path))
                     return;
                 _csvPath = path;
+                // record active CSV in DB when a CSV is opened
+                try
+                {
+                    var db = new TradeMVVM.Trading.Services.DatabaseService();
+                    try { db.EnsureNewCsvActiveTable(); } catch { }
+                    try { db.SetActiveCsv(_csvPath); } catch { }
+                }
+                catch { }
                 var dict = TradeMVVM.Trading.DataAnalysis.HoldingsCalculator.ComputeHoldingsFromCsv(_csvPath);
                 // explicit sanitization: only keep holdings with positive shares
                 _source = (dict ?? new Dictionary<string, TradeMVVM.Trading.DataAnalysis.Holding>())
                     .Values
                     .Where(h => h != null && h.Shares > 0 && !string.IsNullOrWhiteSpace((h.ISIN ?? string.Empty).Replace("\u00A0", string.Empty).Trim()))
                     .ToList();
+
                 Refresh();
             }
             catch

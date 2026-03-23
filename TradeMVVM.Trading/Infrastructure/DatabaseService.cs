@@ -24,6 +24,78 @@ namespace TradeMVVM.Trading.Services
         private readonly Dictionary<string, (DateTime fetchedUtc, List<StockPoint> rows)> _loadByIsinCache
             = new Dictionary<string, (DateTime, List<StockPoint>)>(StringComparer.OrdinalIgnoreCase);
 
+
+
+
+
+        // Replace NEW_Holdings table to contain exactly the provided ISINs.
+        // This deletes existing rows and inserts one row per ISIN using only the ISIN column
+        // (case-insensitive lookup for the column name). Safe no-op if table or column missing.
+        public void ReplaceNewHoldingsWithIsins(IEnumerable<string> isins)
+        {
+            if (isins == null) return;
+            try
+            {
+                using var conn = new SQLiteConnection(_connection);
+                conn.Open();
+
+                using var chk = new SQLiteCommand("SELECT name FROM sqlite_master WHERE type='table' AND name='NEW_Holdings';", conn);
+                var exists = chk.ExecuteScalar();
+                if (exists == null) return;
+
+                // find ISIN-like column name
+                string isinCol = null;
+                using (var pragma = new SQLiteCommand("PRAGMA table_info(NEW_Holdings);", conn))
+                using (var rdr = pragma.ExecuteReader())
+                {
+                    while (rdr.Read())
+                    {
+                        try
+                        {
+                            var col = rdr.GetString(1);
+                            if (string.Equals(col, "isin", StringComparison.OrdinalIgnoreCase) || string.Equals(col, "ISIN", StringComparison.OrdinalIgnoreCase) || string.Equals(col, "Isin", StringComparison.OrdinalIgnoreCase))
+                            {
+                                isinCol = col;
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+
+                }
+
+                if (string.IsNullOrEmpty(isinCol))
+                    return; // cannot insert without ISIN column
+
+                using var tran = conn.BeginTransaction();
+                try
+                {
+                    using var del = new SQLiteCommand("DELETE FROM NEW_Holdings;", conn, tran);
+                    del.ExecuteNonQuery();
+
+                    using var ins = new SQLiteCommand($"INSERT INTO NEW_Holdings ({isinCol}) VALUES (@isin);", conn, tran);
+                    var p = ins.Parameters.AddWithValue("@isin", string.Empty);
+
+                    foreach (var raw in isins)
+                    {
+                        try
+                        {
+                            var v = raw?.Replace("\u00A0", string.Empty).Trim();
+                            if (string.IsNullOrWhiteSpace(v)) continue;
+                            p.Value = v;
+                            ins.ExecuteNonQuery();
+                        }
+                        catch { }
+                    }
+
+                    tran.Commit();
+                }
+                catch { try { tran.Rollback(); } catch { } }
+            }
+            catch { }
+        }
+
+
         private void InvalidateLoadByIsinCache(string isin = null)
         {
             lock (_loadByIsinCacheLock)
@@ -95,6 +167,8 @@ namespace TradeMVVM.Trading.Services
                             }
                         }
                     }
+
+
                 }
                 catch (SQLiteException ex) when (IsBusyOrLocked(ex) && attempt < DbLockedRetryCount)
                 {
@@ -428,6 +502,15 @@ namespace TradeMVVM.Trading.Services
                                         var cnt = Convert.ToInt32(c.ExecuteScalar());
                                         Trace.TraceInformation($"DatabaseService: Prices rows={cnt}");
                                     }
+                            try
+                            {
+                                using (var c3 = new SQLiteCommand("SELECT COUNT(*) FROM NEW_Holdings;", conn))
+                                {
+                                    var cnt3 = Convert.ToInt32(c3.ExecuteScalar());
+                                    Trace.TraceInformation($"DatabaseService: NEW_Holdings rows={cnt3}");
+                                }
+                            }
+                            catch { /* table might not exist or other DB state - ignore */ }
                                 }
                                 catch { }
 
@@ -575,6 +658,41 @@ namespace TradeMVVM.Trading.Services
 
                 Debug.WriteLine("DB: Initialization failed: database remained locked after retries.");
             }
+
+            // Ensure NEW_Holdings table is recreated on startup to avoid stale entries
+            try
+            {
+                RecreateNewHoldingsTable();
+            }
+            catch { }
+        }
+
+        // Drop and recreate NEW_Holdings as a simple table with an ISIN column.
+        // This enforces a clean state on application startup when requested.
+        public void RecreateNewHoldingsTable()
+        {
+            try
+            {
+                using var conn = new SQLiteConnection(_connection);
+                conn.Open();
+                using var tran = conn.BeginTransaction();
+                try
+                {
+                    using (var drop = new SQLiteCommand("DROP TABLE IF EXISTS NEW_Holdings;", conn, tran))
+                        drop.ExecuteNonQuery();
+
+                    using (var create = new SQLiteCommand("CREATE TABLE IF NOT EXISTS NEW_Holdings (ISIN TEXT);", conn, tran))
+                        create.ExecuteNonQuery();
+
+                    tran.Commit();
+                }
+                catch
+                {
+                    try { tran.Rollback(); } catch { }
+                    throw;
+                }
+            }
+            catch { }
         }
 
         // Failure counters persistence for UI thresholds
@@ -592,6 +710,75 @@ namespace TradeMVVM.Trading.Services
                         PRIMARY KEY (Key, Type)
                     );", conn);
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        // Ensure NEW_CSV_ACTIVE table exists. Used to track which CSV is currently active in the UI.
+        public void EnsureNewCsvActiveTable()
+        {
+            try
+            {
+                using var conn = new SQLiteConnection(_connection);
+                conn.Open();
+                using var cmd = new SQLiteCommand(@"
+                    CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE (
+                        CSV TEXT PRIMARY KEY,
+                        Active INTEGER NOT NULL DEFAULT 0,
+                        Created DATETIME
+                    );", conn);
+                cmd.ExecuteNonQuery();
+            }
+            catch { }
+        }
+
+        // Mark the provided CSV (path or name) as the single active CSV. Stores only the filename.
+        public void SetActiveCsv(string csvPathOrName)
+        {
+            if (string.IsNullOrWhiteSpace(csvPathOrName)) return;
+            string csvName;
+            try { csvName = Path.GetFileName(csvPathOrName); } catch { csvName = csvPathOrName; }
+
+            for (int attempt = 1; attempt <= DbLockedRetryCount; attempt++)
+            {
+                try
+                {
+                    using var conn = new SQLiteConnection(_connection);
+                    conn.Open();
+                    using var tran = conn.BeginTransaction();
+                    try
+                    {
+                        using var create = new SQLiteCommand(@"
+                            CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE (
+                                CSV TEXT PRIMARY KEY,
+                                Active INTEGER NOT NULL DEFAULT 0,
+                                Created DATETIME
+                            );", conn, tran);
+                        create.ExecuteNonQuery();
+
+                        using var updAll = new SQLiteCommand("UPDATE NEW_CSV_ACTIVE SET Active = 0;", conn, tran);
+                        updAll.ExecuteNonQuery();
+
+                        using var ins = new SQLiteCommand(@"
+                            INSERT OR REPLACE INTO NEW_CSV_ACTIVE (CSV, Active, Created)
+                            VALUES (@csv, 1, @created);", conn, tran);
+                        ins.Parameters.AddWithValue("@csv", csvName ?? string.Empty);
+                        ins.Parameters.AddWithValue("@created", DateTime.Now);
+                        ins.ExecuteNonQuery();
+
+                        tran.Commit();
+                        return;
+                    }
+                    catch
+                    {
+                        try { tran.Rollback(); } catch { }
+                        throw;
+                    }
+                }
+                catch (SQLiteException ex) when (IsBusyOrLocked(ex) && attempt < DbLockedRetryCount)
+                {
+                    Thread.Sleep(50 * attempt);
+                }
+                catch { return; }
             }
         }
 
@@ -1191,6 +1378,8 @@ namespace TradeMVVM.Trading.Services
                 throw;
             }
         }
+
+
 
         // ========================================
         // LOAD ALL

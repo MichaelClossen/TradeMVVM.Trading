@@ -48,12 +48,24 @@ namespace TradeMVVM.ReadHoldings
         public MainWindow()
         {
             InitializeComponent();
+            // ensure CSV active table exists as early as possible
+            try { EnsureCsvActiveTableExists(_dbPath); } catch { }
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
             // apply any restored zoom (RestoreLayout may have set _zoom before Initialize completed)
             try { if (DgScale != null) { DgScale.ScaleX = _zoom; DgScale.ScaleY = _zoom; } } catch { }
             try { LoadLastHoldings(); } catch { }
             // restore window size and splitter from settings
             try { RestoreLayout(); } catch { }
+            // If a last CSV path was restored into the UI, mark it active in the shared DB immediately
+            try
+            {
+                var restored = TxtPath?.Text;
+                if (!string.IsNullOrWhiteSpace(restored))
+                {
+                    try { SetActiveCsvInDb(_dbPath, restored); } catch { }
+                }
+            }
+            catch { }
             // start periodic refresh from DB every 15 seconds to keep purchase/today values up-to-date
             try { StartRefreshTimer(); } catch { }
             // perform one immediate refresh from DB at startup
@@ -61,6 +73,8 @@ namespace TradeMVVM.ReadHoldings
             // start periodic header totals refresh from NEW_TotalValues every 60 seconds
             try { StartTotalValuesTimer(); } catch { }
             try { StartClock(); } catch { }
+            // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
+            try { EnsureCsvActiveTableExists(_dbPath); } catch { }
         }
 
         private void DgHoldings_PreviewMouseWheel(object? sender, MouseWheelEventArgs e)
@@ -123,6 +137,28 @@ namespace TradeMVVM.ReadHoldings
                     }
                     catch { }
                 });
+            }
+            catch { }
+        }
+
+        // Ensure the NEW_CSV_ACTIVE table exists without changing any rows.
+        private void EnsureCsvActiveTableExists(string dbPath)
+        {
+            if (string.IsNullOrWhiteSpace(dbPath)) return;
+            try
+            {
+                try { var dbDir = Path.GetDirectoryName(dbPath); if (!string.IsNullOrEmpty(dbDir) && !Directory.Exists(dbDir)) Directory.CreateDirectory(dbDir); } catch { }
+                var cs = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+                using var conn = new SqliteConnection(cs);
+                conn.Open();
+                try { using var busy = conn.CreateCommand(); busy.CommandText = "PRAGMA busy_timeout = 5000;"; busy.ExecuteNonQuery(); } catch { }
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE (
+    CSV TEXT PRIMARY KEY,
+    Active INTEGER NOT NULL DEFAULT 0,
+    Created TEXT
+);";
+                cmd.ExecuteNonQuery();
             }
             catch { }
         }
@@ -904,6 +940,8 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
                     var path = dlg.FileName;
                     TxtPath.Text = path;
                     _csvLines = new List<string>(File.ReadAllLines(path, Encoding.UTF8));
+                    // Track active CSV in the shared trading DB: create table if missing and mark this CSV active
+                    try { SetActiveCsvInDb(_dbPath, path); } catch { }
                     TxtInfo.Text = $"Geladene Zeilen: {_csvLines.Count}";
 
                     // compute holdings using FIFO logic
@@ -942,10 +980,77 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
 
                     // enable DB writes and write merged holdings to DB (single update after loading CSV)
                     try { _allowDbWrites = true; WriteHoldingsToDb(); } catch { }
+                    // also ensure NEW_CSV_ACTIVE reflects this CSV selection
+                    try { SetActiveCsvInDb(_dbPath, path); } catch { }
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show(this, "Fehler beim Lesen der Datei: " + ex.Message, "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
+
+        // Ensure NEW_CSV_ACTIVE exists and set only this CSV filename as active (store filename only)
+        private void SetActiveCsvInDb(string dbPath, string csvPathOrName)
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || string.IsNullOrWhiteSpace(csvPathOrName)) return;
+            var csvName = Path.GetFileName(csvPathOrName);
+
+            // Try a few times in case DB is temporarily locked by another process
+            for (int attempt = 1; attempt <= 5; attempt++)
+            {
+                try
+                {
+                    // ensure directory exists
+                    try { var dbDir = Path.GetDirectoryName(dbPath); if (!string.IsNullOrEmpty(dbDir) && !Directory.Exists(dbDir)) Directory.CreateDirectory(dbDir); } catch { }
+
+                    var cs = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+                    using var conn = new SqliteConnection(cs);
+                    conn.Open();
+
+                    using var busy = conn.CreateCommand();
+                    busy.CommandText = "PRAGMA busy_timeout = 5000;";
+                    busy.ExecuteNonQuery();
+
+                    using var cmdCreate = conn.CreateCommand();
+                    cmdCreate.CommandText = @"
+CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE (
+    CSV TEXT PRIMARY KEY,
+    Active INTEGER NOT NULL DEFAULT 0,
+    Created TEXT
+);";
+                    cmdCreate.ExecuteNonQuery();
+
+                    using var tran = conn.BeginTransaction();
+                    try
+                    {
+                        using var updAll = conn.CreateCommand();
+                        updAll.Transaction = tran;
+                        updAll.CommandText = "UPDATE NEW_CSV_ACTIVE SET Active = 0;";
+                        updAll.ExecuteNonQuery();
+
+                        using var ins = conn.CreateCommand();
+                        ins.Transaction = tran;
+                        ins.CommandText = @"INSERT OR REPLACE INTO NEW_CSV_ACTIVE (CSV, Active, Created) VALUES (@csv, 1, @created);";
+                        ins.Parameters.AddWithValue("@csv", csvName ?? string.Empty);
+                        ins.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                        ins.ExecuteNonQuery();
+
+                        tran.Commit();
+                    }
+                    catch { try { tran.Rollback(); } catch { } throw; }
+
+                    // verify table exists
+                    using var chk = conn.CreateCommand();
+                    chk.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='NEW_CSV_ACTIVE';";
+                    var exists = chk.ExecuteScalar();
+                    if (exists != null) return;
+                }
+                catch (Exception ex)
+                {
+                    // last attempt -> rethrow silently, otherwise wait and retry
+                    if (attempt == 5) return;
+                    try { Thread.Sleep(50 * attempt); } catch { }
                 }
             }
         }

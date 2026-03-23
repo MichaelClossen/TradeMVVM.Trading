@@ -19,7 +19,7 @@ using OpenQA.Selenium.Support.UI;
 using Microsoft.Data.Sqlite;
 using System.Collections.Concurrent;
 
-class Program
+partial class Program
 {
     static HttpClient http = new HttpClient();
     static bool Verbose = false;
@@ -66,138 +66,11 @@ class Program
                     driver.Manage().Timeouts().AsynchronousJavaScript = TimeSpan.FromSeconds(5);
                     driver.Manage().Timeouts().ImplicitWait = TimeSpan.FromSeconds(0);
                 }
-                catch
-                {
-                    // optional logging
-                }
+                catch { }
+
                 return driver;
             }
-
-
-
         }
-        // TryFallbackScrape moved to top-level (outside SharedBrowser) to avoid scope issues.
-        public static bool IsIsinInLookup(string dbPath, string isin)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath) || string.IsNullOrWhiteSpace(isin)) return false;
-                var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
-                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT 1 FROM NEW_ISIN_WKN WHERE Isin = @isin LIMIT 1;";
-                cmd.Parameters.AddWithValue("@isin", isin);
-                var v = cmd.ExecuteScalar();
-                conn.Close();
-                return v != null;
-            }
-            catch { return false; }
-        }
-
-        public static string GetWknFromIsinOnline(string isin)
-        {
-            try
-            {
-                var driver = SharedBrowser.GetOrCreateDriver();
-
-                var url = $"https://www.onvista.de/suche/?searchValue={isin}";
-                driver.Navigate().GoToUrl(url);
-
-                var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10))
-                {
-                    PollingInterval = TimeSpan.FromMilliseconds(250)
-                };
-
-                wait.IgnoreExceptionTypes(
-                    typeof(NoSuchElementException),
-                    typeof(StaleElementReferenceException),
-                    typeof(WebDriverException));
-
-                try
-                {
-                    // Strategy 1: Try known table column
-                    var element = wait.Until(d =>
-                    {
-                        try
-                        {
-                            var els = d.FindElements(
-                                By.XPath("//*[contains(text(),'WKN')]"));
-
-                            if (els.Count > 0)
-                                return els[0];
-
-                            return null;
-                        }
-                        catch
-                        {
-                            return null;
-                        }
-                    });
-
-                    if (element != null)
-                    {
-                        var text = element.Text;
-
-                        // Extract 6-char WKN
-                        var match = System.Text.RegularExpressions.Regex
-                            .Match(text, @"\b[A-Z0-9]{6}\b");
-
-                        if (match.Success)
-                            return match.Value;
-                    }
-                }
-                catch (WebDriverTimeoutException)
-                {
-                    if (Verbose)
-                        Console.WriteLine($"Timeout: {isin}");
-                }
-
-                // Strategy 2: fallback → search full page text
-                try
-                {
-                    var body = driver.FindElement(By.TagName("body"));
-                    var text = body.Text;
-
-                    var match = System.Text.RegularExpressions.Regex
-                        .Match(text, @"\b[A-Z0-9]{6}\b");
-
-                    if (match.Success)
-                        return match.Value;
-                }
-                catch { }
-            }
-            catch (Exception ex)
-            {
-                if (Verbose)
-                    Console.WriteLine($"Lookup error {isin}: {ex.Message}");
-            }
-
-            return null;
-        }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         public static void QuitDriver()
         {
@@ -221,7 +94,320 @@ class Program
                 try { Thread.Sleep(200); } catch { }
             }
         }
+
+        public static bool IsIsinInLookup(string dbPath, string isin)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath) || string.IsNullOrWhiteSpace(isin)) return false;
+                var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT 1 FROM NEW_ISIN_WKN WHERE Isin = @isin LIMIT 1;";
+                cmd.Parameters.AddWithValue("@isin", isin);
+                var v = cmd.ExecuteScalar();
+                conn.Close();
+                return v != null;
+            }
+            catch { return false; }
+        }
+
+        // Best-effort online lookup for WKN. This is optional and may return null if lookup fails.
+        public static string? GetWknFromIsinOnline(string isin)
+        {
+            // Keep this simple: do not block scanner if lookup fails. Return null on errors.
+            try
+            {
+                if (string.IsNullOrWhiteSpace(isin)) return null;
+                // Attempt simple HTTP fetch to a known service could be implemented here.
+                // For now, return null to avoid adding heavy scraping logic in the scanner.
+                return null;
+            }
+            catch { return null; }
+        }
+
+        public static int ReadIsinsCountFromDatabase(string dbPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return 0;
+                var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly };
+                using var conn = new SqliteConnection(csb.ToString());
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(1) FROM NEW_Holdings WHERE isin IS NOT NULL;";
+                var v = cmd.ExecuteScalar();
+                conn.Close();
+                if (v == null || v == DBNull.Value) return 0;
+                try { return Convert.ToInt32(v); } catch { return 0; }
+            }
+            catch { return 0; }
+        }
     }
+
+    // Return CSV filename (CSV column) for the active CSV row (Active = 1), or null if none.
+    static string? GetActiveCsvIdFromDb(string dbPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return null;
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            conn.Open();
+            try { using var b = conn.CreateCommand(); b.CommandText = "PRAGMA busy_timeout = 5000;"; b.ExecuteNonQuery(); } catch { }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT CSV FROM NEW_CSV_ACTIVE WHERE Active = 1 ORDER BY Created DESC LIMIT 1;";
+            var res = cmd.ExecuteScalar();
+            if (res == null || res == DBNull.Value) return null;
+            return res.ToString();
+        }
+        catch { return null; }
+    }
+
+    // TryFallbackScrape moved to top-level (outside SharedBrowser) to avoid scope issues.
+    public static bool IsIsinInLookup(string dbPath, string isin)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath) || string.IsNullOrWhiteSpace(isin)) return false;
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM NEW_ISIN_WKN WHERE Isin = @isin LIMIT 1;";
+            cmd.Parameters.AddWithValue("@isin", isin);
+            var v = cmd.ExecuteScalar();
+            conn.Close();
+            return v != null;
+        }
+        catch { return false; }
+    }
+
+    public static string GetWknFromIsinOnline(string isin)
+    {
+        try
+        {
+            var driver = SharedBrowser.GetOrCreateDriver();
+
+            var url = $"https://www.onvista.de/suche/?searchValue={isin}";
+            driver.Navigate().GoToUrl(url);
+
+            var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10))
+            {
+                PollingInterval = TimeSpan.FromMilliseconds(250)
+            };
+
+            wait.IgnoreExceptionTypes(
+                typeof(NoSuchElementException),
+                typeof(StaleElementReferenceException),
+                typeof(WebDriverException));
+
+            try
+            {
+                // Strategy 1: Try known table column
+                var element = wait.Until(d =>
+                {
+                    try
+                    {
+                        var els = d.FindElements(
+                            By.XPath("//*[contains(text(),'WKN')]"));
+
+                        if (els.Count > 0)
+                            return els[0];
+
+                        return null;
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                });
+
+                if (element != null)
+                {
+                    var text = element.Text;
+
+                    // Extract 6-char WKN
+                    var match = System.Text.RegularExpressions.Regex
+                        .Match(text, @"\b[A-Z0-9]{6}\b");
+
+                    if (match.Success)
+                        return match.Value;
+                }
+            }
+            catch (WebDriverTimeoutException)
+            {
+                if (Verbose)
+                    Console.WriteLine($"Timeout: {isin}");
+            }
+
+            // Strategy 2: fallback → search full page text
+            try
+            {
+                var body = driver.FindElement(By.TagName("body"));
+                var text = body.Text;
+
+                var match = System.Text.RegularExpressions.Regex
+                    .Match(text, @"\b[A-Z0-9]{6}\b");
+
+                if (match.Success)
+                    return match.Value;
+            }
+            catch { }
+        }
+        catch (Exception ex)
+        {
+            if (Verbose)
+                Console.WriteLine($"Lookup error {isin}: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    static int ReadIsinsCountFromDatabase(string dbPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return 0;
+            var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly };
+            using var conn = new SqliteConnection(csb.ToString());
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(1) FROM NEW_Holdings WHERE isin IS NOT NULL;";
+            var v = cmd.ExecuteScalar();
+            conn.Close();
+            if (v == null || v == DBNull.Value) return 0;
+            try { return Convert.ToInt32(v); } catch { return 0; }
+        }
+        catch { return 0; }
+    }
+
+    // TryFallbackScrape moved to top-level (outside SharedBrowser) to avoid scope issues.
+    //public static bool IsIsinInLookup(string dbPath, string isin)
+    //{
+    //    try
+    //    {
+    //        if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath) || string.IsNullOrWhiteSpace(isin)) return false;
+    //        var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+    //        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+    //        conn.Open();
+    //        using var cmd = conn.CreateCommand();
+    //        cmd.CommandText = "SELECT 1 FROM NEW_ISIN_WKN WHERE Isin = @isin LIMIT 1;";
+    //        cmd.Parameters.AddWithValue("@isin", isin);
+    //        var v = cmd.ExecuteScalar();
+    //        conn.Close();
+    //        return v != null;
+    //    }
+    //    catch { return false; }
+    //}
+
+    //public static string GetWknFromIsinOnline(string isin)
+    //{
+    //    try
+    //    {
+    //        var driver = SharedBrowser.GetOrCreateDriver();
+
+    //        var url = $"https://www.onvista.de/suche/?searchValue={isin}";
+    //        driver.Navigate().GoToUrl(url);
+
+    //        var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10))
+    //        {
+    //            PollingInterval = TimeSpan.FromMilliseconds(250)
+    //        };
+
+    //        wait.IgnoreExceptionTypes(
+    //            typeof(NoSuchElementException),
+    //            typeof(StaleElementReferenceException),
+    //            typeof(WebDriverException));
+
+    //        try
+    //        {
+    //            // Strategy 1: Try known table column
+    //            var element = wait.Until(d =>
+    //            {
+    //                try
+    //                {
+    //                    var els = d.FindElements(
+    //                        By.XPath("//*[contains(text(),'WKN')]"));
+
+    //                    if (els.Count > 0)
+    //                        return els[0];
+
+    //                    return null;
+    //                }
+    //                catch
+    //                {
+    //                    return null;
+    //                }
+    //            });
+
+    //            if (element != null)
+    //            {
+    //                var text = element.Text;
+
+    //                // Extract 6-char WKN
+    //                var match = System.Text.RegularExpressions.Regex
+    //                    .Match(text, @"\b[A-Z0-9]{6}\b");
+
+    //                if (match.Success)
+    //                    return match.Value;
+    //            }
+    //        }
+    //        catch (WebDriverTimeoutException)
+    //        {
+    //            if (Verbose)
+    //                Console.WriteLine($"Timeout: {isin}");
+    //        }
+
+    //        // Strategy 2: fallback → search full page text
+    //        try
+    //        {
+    //            var body = driver.FindElement(By.TagName("body"));
+    //            var text = body.Text;
+
+    //            var match = System.Text.RegularExpressions.Regex
+    //                .Match(text, @"\b[A-Z0-9]{6}\b");
+
+    //            if (match.Success)
+    //                return match.Value;
+    //        }
+    //        catch { }
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        if (Verbose)
+    //            Console.WriteLine($"Lookup error {isin}: {ex.Message}");
+    //    }
+
+    //    return null;
+    //}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     // Read lightweight WKN lookup table
     static string? GetWknFromDb(string dbPath, string isin)
@@ -244,24 +430,135 @@ class Program
     }
 
     // Minimal fallback scrape: try a small set of HTTP-based scrapers (fast) and a Selenium fallback for ariva using wkn if necessary.
+    //static async Task<Result?> TryFallbackScrapeAriva(string isin, string? knownWkn)
+    //{
+    //    //TODO
+    //    var fb = new Result() { Price = 0, Change = "", Source = "" };
+
+    //    // Get Price and Change here
+    //    // .....
+
+
+    //    // .....
+
+    //    if (fb.Price ==0 ||fb.Change=="")
+    //    {            
+    //        return null;
+    //    }
+
+    //    fb.Source = "Ariva";
+    //    return fb;
+    //}
+    // Minimal fallback scrape: try a small set of HTTP-based scrapers (fast)
+    // and a Selenium fallback for ariva using wkn if necessary.
     static async Task<Result?> TryFallbackScrapeAriva(string isin, string? knownWkn)
     {
-        //TODO
-        var fb = new Result() { Price = 0, Change = "", Source = "" };
+        try
+        {
+            if (string.IsNullOrWhiteSpace(knownWkn))
+                return null;
 
-        // Get Price and Change here
-        // .....
+            var fb = new Result()
+            {
+                Price = 0,
+                Change = "",
+                Source = ""
+            };
 
+            var driver = SharedBrowser.GetOrCreateDriver();
 
-        // .....
+            var url = $"https://www.ariva.de/hebelprodukte/{knownWkn}";
 
-        if (fb.Price ==0 ||fb.Change=="")
-        {            
-            return null;
+            driver.Navigate().GoToUrl(url);
+
+            var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10))
+            {
+                PollingInterval = TimeSpan.FromMilliseconds(250)
+            };
+
+            wait.IgnoreExceptionTypes(
+                typeof(NoSuchElementException),
+                typeof(StaleElementReferenceException),
+                typeof(WebDriverException));
+
+            // Redirect abwarten
+            try
+            {
+                wait.Until(d =>
+                    !d.Url.Contains("/wkn/"));
+            }
+            catch { }
+
+            await Task.Delay(300); // Render-Zeit
+
+            // PRICE (Geld)
+            try
+            {
+                wait.Until(d =>
+                    d.FindElements(
+                        By.ClassName("instrument-header-quote"))
+                    .Count > 0);
+
+                var priceElement =
+                    driver.FindElements(
+                        By.ClassName("instrument-header-quote"))[0];
+
+                var priceText =
+                    priceElement.Text
+                        .Replace("€", "")
+                        .Replace(",", ".")
+                        .Replace("\u00A0", "")
+                        .Trim();
+
+                if (double.TryParse(
+                    priceText,
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var p))
+                {
+                    fb.Price = p;
+                }
+            }
+            catch { }
+
+            // CHANGE (%)
+            try
+            {
+                var changeElements =
+                    driver.FindElements(
+                        By.ClassName("instrument-header-rel-change"));
+
+                if (changeElements.Count > 0)
+                {
+                    var changeText =
+                        changeElements[0].Text
+                            .Replace("%", "")
+                            .Replace(",", ".")
+                            .Trim();
+
+                    fb.Change = changeText;
+                }
+            }
+            catch { }
+
+            // Prüfen ob gültig
+            if (fb.Price == 0 || string.IsNullOrWhiteSpace(fb.Change))
+            {
+                return null;
+            }
+
+            fb.Source = "Ariva";
+
+            return fb;
+        }
+        catch (Exception ex)
+        {
+            if (Verbose)
+                Console.WriteLine(
+                    $"TryFallbackScrapeAriva error {knownWkn}: {ex.Message}");
         }
 
-        fb.Source = "Ariva";
-        return fb;
+        return null;
     }
 
     static bool IsValidIsin(string s)
@@ -432,7 +729,9 @@ class Program
         }
 
         var isins = new List<string>();
+        var seenIsins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var badLines = new List<string>();
+        var isinNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in rawLines)
         {
             var l = line.Trim();
@@ -441,11 +740,22 @@ class Program
             if (string.IsNullOrWhiteSpace(l)) continue;
 
             // support CSV-like lines: ISIN[,name] or ISIN;name or ISIN\tname
-            var first = l.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries).First().Trim();
+            var parts = l.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            var first = parts.First().Trim();
+            var maybeName = parts.Skip(1).FirstOrDefault()?.Trim();
             first = first.Trim();
             if (IsValidIsin(first))
             {
-                isins.Add(first.ToUpperInvariant());
+                var up = first.ToUpperInvariant();
+                if (!seenIsins.Contains(up))
+                {
+                    isins.Add(up);
+                    seenIsins.Add(up);
+                }
+                if (!string.IsNullOrWhiteSpace(maybeName))
+                {
+                    if (!isinNames.ContainsKey(up)) isinNames[up] = maybeName;
+                }
             }
             else
             {
@@ -456,11 +766,17 @@ class Program
         // ensure we still process all lines from the CSV: include bad/unknown lines as best-effort entries
         foreach (var b in badLines)
         {
-            var tok = b.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+            var parts = b.Split(new[] { ',', ';', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            var tok = parts.FirstOrDefault()?.Trim();
+            var maybeName = parts.Skip(1).FirstOrDefault()?.Trim();
             if (!string.IsNullOrWhiteSpace(tok))
             {
                 var up = tok.ToUpperInvariant();
-                if (!isins.Contains(up)) isins.Add(up);
+                if (!seenIsins.Contains(up)) { isins.Add(up); seenIsins.Add(up); }
+                if (!string.IsNullOrWhiteSpace(maybeName))
+                {
+                    if (!isinNames.ContainsKey(up)) isinNames[up] = maybeName;
+                }
             }
         }
 
@@ -471,7 +787,11 @@ class Program
             foreach (var line in rawLines)
             {
                 var l = line.Trim().Trim('\uFEFF', '\u200B');
-                if (!string.IsNullOrWhiteSpace(l)) isins.Add(l);
+                if (!string.IsNullOrWhiteSpace(l) && !seenIsins.Contains(l))
+                {
+                    isins.Add(l);
+                    seenIsins.Add(l);
+                }
             }
         }
 
@@ -489,6 +809,9 @@ class Program
         // path to sqlite DB containing NEW_Holdings table
         string dbPath = @"C:\Users\micha\Desktop\Trade\trading.db";
 
+        // Ensure DB has uniqueness constraint on Isin and remove pre-existing duplicates
+        try { CleanDuplicateIsinsAndEnsureUniqueIndex(dbPath); } catch { }
+
         int cycle = 0;
         while (true)
         {
@@ -502,6 +825,52 @@ class Program
                 {
                     isins = dbIsins;
                     Console.WriteLine($"Lade {isins.Count} ISINs aus DB: {dbPath}");
+
+                    // Try to load human-readable names from the DB (if a suitable column exists)
+                    try
+                    {
+                        var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly };
+                        using var conn2 = new SqliteConnection(csb.ToString());
+                        conn2.Open();
+
+                        var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        using (var p = conn2.CreateCommand())
+                        {
+                            p.CommandText = "PRAGMA table_info(NEW_Holdings);";
+                            using var r = p.ExecuteReader();
+                            while (r.Read()) cols.Add(r.GetString(1));
+                        }
+
+                        var candidates = new[] { "Name", "name", "Title", "title", "Bezeichnung", "ProductName", "Description", "description", "ShortName", "shortName" };
+                        var chosen = cols.FirstOrDefault(c => candidates.Contains(c, StringComparer.OrdinalIgnoreCase));
+                        if (!string.IsNullOrWhiteSpace(chosen))
+                        {
+                            try
+                            {
+                                using var q = conn2.CreateCommand();
+                                q.CommandText = $"SELECT isin, \"{chosen}\" FROM NEW_Holdings WHERE isin IS NOT NULL;";
+                                using var rr = q.ExecuteReader();
+                                while (rr.Read())
+                                {
+                                    try
+                                    {
+                                        var isinVal = rr.IsDBNull(0) ? null : rr.GetString(0)?.Trim();
+                                        var nameVal = rr.IsDBNull(1) ? null : rr.GetString(1)?.Trim();
+                                        if (!string.IsNullOrWhiteSpace(isinVal) && !string.IsNullOrWhiteSpace(nameVal))
+                                        {
+                                            var up = isinVal.ToUpperInvariant();
+                                            if (!isinNames.ContainsKey(up)) isinNames[up] = nameVal;
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        conn2.Close();
+                    }
+                    catch { }
                 }
                 else
                 {
@@ -514,11 +883,46 @@ class Program
             }
             var sw = Stopwatch.StartNew();
             var allResults = new List<PerIsinReport>();
+            // track whether we should abort this run because NEW_Holdings changed
+            bool abortCycle = false;
+            // initial count at start of processing loop
+            var cycleStartIsinCount = DbHelpers.ReadIsinsCountFromDatabase(dbPath);
+            var lastCountCheck = DateTime.UtcNow;
+
+            // Start a background poller that checks the NEW_Holdings count every 15 seconds
+            // If the count changes we mark abortCycle and try to stop Selenium to interrupt
+            // any in-flight provider work so the run can be restarted quickly.
+            var countPollCts = new CancellationTokenSource();
+            var countPollTask = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!countPollCts.Token.IsCancellationRequested)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(15), countPollCts.Token).ConfigureAwait(false);
+                        if (countPollCts.Token.IsCancellationRequested) break;
+                        try
+                        {
+                            var current = DbHelpers.ReadIsinsCountFromDatabase(dbPath);
+                            if (current != cycleStartIsinCount)
+                            {
+                                abortCycle = true;
+                                if (Verbose) Console.WriteLine($"NEW_Holdings count changed: {cycleStartIsinCount} -> {current} -> aborting current run");
+                                try { SharedBrowser.QuitDriver(); } catch { }
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch (TaskCanceledException) { }
+            });
             // warm up network, HTTP and Selenium so the first ISIN query is not affected by cold start
             try { await WarmUpProvidersAsync(); } catch { }
             for (int i = 0; i < isins.Count; i++)
             {
                 var isin = isins[i];
+                var displayName = (isinNames != null && !string.IsNullOrWhiteSpace(isin) && isinNames.TryGetValue(isin, out var n)) ? n : null;
                 // you can change the preferred provider here if needed
                 var task = GetSmartData(isin, preferredProvider: "BNP");
                 // Always use the configured per-ISIN timeout. Previously we shortened non-ISIN entries
@@ -528,7 +932,14 @@ class Program
 
                 var finished = await Task.WhenAny(task, Task.Delay(timeoutMs));
 
-                Console.WriteLine($"\nISIN {i + 1}/{isins.Count}: {isin}");
+                if (abortCycle)
+                {
+                    Console.WriteLine("Abbruch: NEW_Holdings wurde geändert -> beende aktueller Durchlauf");
+                    swIsin.Stop();
+                    break;
+                }
+
+                Console.WriteLine($"\nISIN {i + 1}/{isins.Count}: {isin}{(string.IsNullOrWhiteSpace(displayName) ? "" : " - " + displayName)}");
 
                 if (finished != task)
                 {
@@ -584,8 +995,30 @@ class Program
                                     // Persist found values and report — treat as successful result
                                     var updatedStrFb = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                                     UpsertNewHolding(dbPath, isin, fb.Price, fb.Change != null && !fb.Change.StartsWith("n/a") ? (double?)ParseDecimalToDouble(fb.Change.Replace("%", "")) : null, updatedStrFb, fb.Source);
-                                    if (Verbose) Console.WriteLine($"Fallback: gefunden {fb.Price} € ({fb.Change}) von {fb.Source} — in DB eingetragen");
-                                    allResults.Add(new PerIsinReport { Isin = isin, Result = new SmartResult { BestPrice = fb.Price.ToString("0.000") + " €", BestProvider = fb.Source, Change = fb.Change ?? "n/a", ProviderStatusLines = new List<string> { "Fallback: '" + fb.Source + "'" } }, TimedOut = false, ElapsedSeconds = swIsin.Elapsed.TotalSeconds });
+                                    // Log DB update and provider status in the same format as successful provider results
+                                    var bestPriceStr = fb.Price.ToString("0.000", CultureInfo.GetCultureInfo("de-DE")) + " €";
+                                    string changeStr = "n/a";
+                                    try
+                                    {
+                                        if (!string.IsNullOrWhiteSpace(fb.Change) && !fb.Change.Trim().StartsWith("n/a", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            var pctVal = ParseDecimalToDouble(fb.Change.Replace("%", ""));
+                                            if (!double.IsNaN(pctVal)) changeStr = pctVal.ToString("0.00", CultureInfo.GetCultureInfo("de-DE")) + " %";
+                                            else changeStr = fb.Change + " %";
+                                        }
+                                    }
+                                    catch { changeStr = fb.Change ?? "n/a"; }
+
+                                    Console.WriteLine($"DB: NEW_Holdings aktualisiert für {isin}: purchaseValue={fb.Price.ToString("0.000", CultureInfo.GetCultureInfo("de-DE"))} percent={(changeStr == "n/a" ? "NULL" : changeStr.Replace(" %", ""))} updated={updatedStrFb} provider={fb.Source}");
+
+                                    // print provider status (fallback)
+                                    Console.WriteLine("Provider-Status:");
+                                    Console.WriteLine($"  {fb.Source,-10}: {bestPriceStr} | {changeStr}");
+                                    var sr = new SmartResult { BestPrice = bestPriceStr, BestProvider = fb.Source, Change = changeStr, ProviderStatusLines = new List<string> { "Fallback: '" + fb.Source + "'" } };
+                                    Console.WriteLine($"Best: {sr.BestPrice} ({sr.BestProvider})");
+                                    Console.WriteLine($"Change: {sr.Change}");
+
+                                    allResults.Add(new PerIsinReport { Isin = isin, Result = sr, TimedOut = false, ElapsedSeconds = swIsin.Elapsed.TotalSeconds });
                                     swIsin.Stop();
                                     continue;
                                 }
@@ -668,6 +1101,11 @@ class Program
                 Console.WriteLine($"Change: {result.Change}");
                 // Spread removed from output
                 allResults.Add(new PerIsinReport { Isin = isin, Result = result, TimedOut = false, ElapsedSeconds = swIsin.Elapsed.TotalSeconds });
+                if (abortCycle)
+                {
+                    Console.WriteLine("Abbruch: NEW_Holdings wurde geändert -> beende aktueller Durchlauf");
+                    break;
+                }
             }
 
             sw.Stop();
@@ -690,9 +1128,21 @@ class Program
                     Console.WriteLine($"{idx,3}: {e.Isin} -> {e.Result.BestPrice} ({e.Result.BestProvider}) | Change: {e.Result.Change} (Dauer {e.ElapsedSeconds:0.##} s)");
                 }
             }
+            // stop background poller for this run
+            try
+            {
+                if (countPollCts != null && !countPollCts.IsCancellationRequested)
+                {
+                    try { countPollCts.Cancel(); } catch { }
+                    try { countPollTask.Wait(1000); } catch { }
+                    try { countPollCts.Dispose(); } catch { }
+                }
+            }
+            catch { }
+
             // shutdown shared browser after completing this full run so next run starts with a fresh Chrome/Selenium
             // compute and persist aggregate header values to NEW_TotalValues table
-            try { UpsertTotalValues(dbPath); } catch { }
+            try { UpsertTotalValues(dbPath, file); } catch { }
 
             try { SharedBrowser.QuitDriver(); } catch { }
             // small pause to allow Chrome to exit cleanly before next cycle
@@ -852,6 +1302,12 @@ class Program
         public SmartResult? Result { get; set; }
         public bool TimedOut { get; set; }
         public double ElapsedSeconds { get; set; }
+    }
+
+    class IsinEntry
+    {
+        public string Isin { get; set; }
+        public string Name { get; set; }
     }
 
     // =========================
@@ -1906,19 +2362,7 @@ class Program
             cmd.Parameters.AddWithValue("@isin", isin ?? (object)DBNull.Value);
             var affected = 0;
             try { affected = cmd.ExecuteNonQuery(); } catch { }
-
-            if (affected == 0)
-            {
-                try
-                {
-                    using var ins = conn.CreateCommand();
-                    ins.CommandText = "INSERT OR IGNORE INTO NEW_Holdings (isin, WKN) VALUES (@isin, @wkn);";
-                    ins.Parameters.AddWithValue("@isin", isin ?? (object)DBNull.Value);
-                    ins.Parameters.AddWithValue("@wkn", wkn ?? (object)DBNull.Value);
-                    try { ins.ExecuteNonQuery(); } catch { }
-                }
-                catch { }
-            }
+            // Do not INSERT new NEW_Holdings rows here. Only update existing rows.
 
             // Also maintain a lightweight lookup table NEW_ISIN_WKN so ISIN->WKN mappings
             // are available even for entries not present in NEW_Holdings. Create table if missing
@@ -1934,12 +2378,28 @@ CREATE TABLE IF NOT EXISTS NEW_ISIN_WKN (
 );";
                 try { create.ExecuteNonQuery(); } catch { }
 
-                using var ins2 = conn.CreateCommand();
-                ins2.CommandText = "INSERT OR IGNORE INTO NEW_ISIN_WKN (Isin, WKN, Created) VALUES (@isin, @wkn, @created);";
-                ins2.Parameters.AddWithValue("@isin", isin ?? (object)DBNull.Value);
-                ins2.Parameters.AddWithValue("@wkn", wkn ?? (object)DBNull.Value);
-                ins2.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                try { ins2.ExecuteNonQuery(); } catch { }
+                // If a lookup row exists but has no WKN, update it. Otherwise insert the pair.
+                try
+                {
+                    using var updLookup = conn.CreateCommand();
+                    updLookup.CommandText = "UPDATE NEW_ISIN_WKN SET WKN = @wkn, Created = @created WHERE Isin = @isin AND (WKN IS NULL OR TRIM(WKN) = '');";
+                    updLookup.Parameters.AddWithValue("@wkn", wkn ?? (object)DBNull.Value);
+                    updLookup.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                    updLookup.Parameters.AddWithValue("@isin", isin ?? (object)DBNull.Value);
+                    var updated = 0;
+                    try { updated = updLookup.ExecuteNonQuery(); } catch { updated = 0; }
+
+                    if (updated == 0)
+                    {
+                        using var ins2 = conn.CreateCommand();
+                        ins2.CommandText = "INSERT OR IGNORE INTO NEW_ISIN_WKN (Isin, WKN, Created) VALUES (@isin, @wkn, @created);";
+                        ins2.Parameters.AddWithValue("@isin", isin ?? (object)DBNull.Value);
+                        ins2.Parameters.AddWithValue("@wkn", wkn ?? (object)DBNull.Value);
+                        ins2.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                        try { ins2.ExecuteNonQuery(); } catch { }
+                    }
+                }
+                catch { }
             }
             catch { }
 
@@ -1947,6 +2407,26 @@ CREATE TABLE IF NOT EXISTS NEW_ISIN_WKN (
         }
         catch { }
     }
+
+    // Return CSV filename (CSV column) for the active CSV row (Active = 1), or null if none.
+    //static string? GetActiveCsvIdFromDb(string dbPath)
+    //{
+    //    try
+    //    {
+    //        if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return null;
+    //        var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+    //        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+    //        conn.Open();
+    //        try { using var b = conn.CreateCommand(); b.CommandText = "PRAGMA busy_timeout = 5000;"; b.ExecuteNonQuery(); } catch { }
+
+    //        using var cmd = conn.CreateCommand();
+    //        cmd.CommandText = "SELECT CSV FROM NEW_CSV_ACTIVE WHERE Active = 1 ORDER BY Created DESC LIMIT 1;";
+    //        var res = cmd.ExecuteScalar();
+    //        if (res == null || res == DBNull.Value) return null;
+    //        return res.ToString();
+    //    }
+    //    catch { return null; }
+    //}
 
     static void UpsertNewHolding(string dbPath, string isin, double purchaseValue, double? percent, string updated, string provider)
     {
@@ -2077,48 +2557,8 @@ CREATE TABLE IF NOT EXISTS NEW_ISIN_WKN (
                 try
                 {
                     var affected = cmd.ExecuteNonQuery();
-                    if (affected == 0)
-                    {
-                        // Try INSERT as fallback. Only include columns that exist in the table to avoid NOT NULL constraint failures.
-                        try
-                        {
-                            var insertCols = new List<string>();
-                            var insertParams = new List<string>();
-
-                            // ISIN should always exist
-                            if (cols.Contains("isin")) { insertCols.Add("isin"); insertParams.Add("@isin"); }
-                            if (cols.Contains("purchaseValue")) { insertCols.Add("purchaseValue"); insertParams.Add("@pv"); }
-                            if (cols.Contains("percent")) { insertCols.Add("percent"); insertParams.Add("@pct"); }
-                            if (cols.Contains("updated")) { insertCols.Add("updated"); insertParams.Add("@upd"); }
-                            if (cols.Contains("Provider")) { insertCols.Add("Provider"); insertParams.Add("@prov"); }
-                            if (cols.Contains("TodayValue")) { insertCols.Add("TodayValue"); insertParams.Add("@tv"); }
-                            if (cols.Contains("WKN")) { insertCols.Add("WKN"); insertParams.Add("@wkn"); }
-
-                            if (insertCols.Count >= 1)
-                            {
-                                var ins = conn.CreateCommand();
-                                ins.CommandText = $"INSERT INTO NEW_Holdings ({string.Join(',', insertCols)}) VALUES ({string.Join(',', insertParams)});";
-                                ins.Parameters.AddWithValue("@isin", isin);
-                                ins.Parameters.AddWithValue("@pv", purchaseValue);
-                                if (percent.HasValue) ins.Parameters.AddWithValue("@pct", percent.Value);
-                                else ins.Parameters.AddWithValue("@pct", DBNull.Value);
-                                ins.Parameters.AddWithValue("@upd", updated ?? (object)DBNull.Value);
-                                if (!string.IsNullOrWhiteSpace(provider)) ins.Parameters.AddWithValue("@prov", provider);
-                                else ins.Parameters.AddWithValue("@prov", DBNull.Value);
-                                if (todayValue.HasValue) ins.Parameters.AddWithValue("@tv", todayValue.Value);
-                                else ins.Parameters.AddWithValue("@tv", DBNull.Value);
-                                if (cols.Contains("WKN"))
-                                {
-                                    if (!string.IsNullOrWhiteSpace(wknValue)) ins.Parameters.AddWithValue("@wkn", wknValue);
-                                    else ins.Parameters.AddWithValue("@wkn", DBNull.Value);
-                                }
-
-                                try { ins.ExecuteNonQuery(); }
-                                catch { /* best-effort insert; ignore failures */ }
-                            }
-                        }
-                        catch { }
-                    }
+                    // Scanner must not INSERT new rows. If UPDATE affected 0 rows, do nothing.
+                    // This prevents the scanner from adding ISINs to NEW_Holdings during its run.
                 }
                 catch { }
             }
@@ -2126,7 +2566,38 @@ CREATE TABLE IF NOT EXISTS NEW_ISIN_WKN (
         catch { }
     }
 
-    static void UpsertTotalValues(string dbPath)
+    static void CleanDuplicateIsinsAndEnsureUniqueIndex(string dbPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return;
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            conn.Open();
+
+            using var tx = conn.BeginTransaction();
+            try
+            {
+                // remove duplicates keeping smallest rowid
+                using var del = conn.CreateCommand();
+                del.CommandText = @"DELETE FROM NEW_Holdings WHERE rowid NOT IN (SELECT MIN(rowid) FROM NEW_Holdings WHERE Isin IS NOT NULL GROUP BY Isin);";
+                del.ExecuteNonQuery();
+
+                // create unique index on Isin
+                using var idx = conn.CreateCommand();
+                idx.CommandText = @"CREATE UNIQUE INDEX IF NOT EXISTS idx_new_holdings_isin ON NEW_Holdings(Isin);";
+                idx.ExecuteNonQuery();
+
+                tx.Commit();
+            }
+            catch { try { tx.Rollback(); } catch { } }
+
+            conn.Close();
+        }
+        catch { }
+    }
+
+    static void UpsertTotalValues(string dbPath, string csvFile)
     {
         try
         {
@@ -2162,13 +2633,15 @@ CREATE TABLE IF NOT EXISTS NEW_TotalValues_new (
     TotalShares INTEGER,
     SumAvgTotal REAL,
     SumTodayValue REAL,
-    LastUpdated TEXT
+    LastUpdated TEXT,
+    CSV TEXT
 );";
                         c1.ExecuteNonQuery();
 
                         using var c2 = conn.CreateCommand();
-                        c2.CommandText = @"INSERT INTO NEW_TotalValues_new (TotalRows, TotalShares, SumAvgTotal, SumTodayValue, LastUpdated)
-SELECT TotalRows, TotalShares, SumAvgTotal, SumTodayValue, LastUpdated FROM NEW_TotalValues;";
+                        // Copy existing rows and set CSV to NULL for migrated rows
+                        c2.CommandText = @"INSERT INTO NEW_TotalValues_new (TotalRows, TotalShares, SumAvgTotal, SumTodayValue, LastUpdated, CSV)
+SELECT TotalRows, TotalShares, SumAvgTotal, SumTodayValue, LastUpdated, NULL FROM NEW_TotalValues;";
                         try { c2.ExecuteNonQuery(); } catch { /* ignore if nothing to copy */ }
 
                         using var c3 = conn.CreateCommand();
@@ -2196,9 +2669,31 @@ CREATE TABLE IF NOT EXISTS NEW_TotalValues (
     TotalShares INTEGER,
     SumAvgTotal REAL,
     SumTodayValue REAL,
-    LastUpdated TEXT
+    LastUpdated TEXT,
+    CSV TEXT
 );";
                 cmdCreate.ExecuteNonQuery();
+                // If table already existed without CSV column, add it now.
+                try
+                {
+                    var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    using var p = conn.CreateCommand();
+                    p.CommandText = "PRAGMA table_info(NEW_TotalValues);";
+                    using var r = p.ExecuteReader();
+                    while (r.Read()) cols.Add(r.GetString(1));
+
+                    if (!cols.Contains("CSV"))
+                    {
+                        try
+                        {
+                            using var alt = conn.CreateCommand();
+                            alt.CommandText = "ALTER TABLE NEW_TotalValues ADD COLUMN CSV TEXT;";
+                            alt.ExecuteNonQuery();
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
             }
             catch { }
 
@@ -2254,6 +2749,17 @@ CREATE TABLE IF NOT EXISTS NEW_TotalValues (
             }
             catch { }
 
+            // derive filename only (no path)
+            var csvName = string.Empty;
+            try
+            {
+                // prefer the active CSV id recorded in the shared DB when available
+                var activeId = GetActiveCsvIdFromDb(dbPath);
+                if (!string.IsNullOrWhiteSpace(activeId)) csvName = activeId;
+                else csvName = string.IsNullOrWhiteSpace(csvFile) ? string.Empty : Path.GetFileName(csvFile);
+            }
+            catch { try { csvName = string.IsNullOrWhiteSpace(csvFile) ? string.Empty : Path.GetFileName(csvFile); } catch { csvName = csvFile ?? string.Empty; } }
+
             // Insert new row (append)
             try
             {
@@ -2262,15 +2768,15 @@ CREATE TABLE IF NOT EXISTS NEW_TotalValues (
                 using var up = conn.CreateCommand();
                 up.CommandText = @"
 INSERT INTO NEW_TotalValues 
-(TotalRows, TotalShares, SumAvgTotal, SumTodayValue, LastUpdated) 
-VALUES (@r, @s, @a, @t, @u);";
+(TotalRows, TotalShares, SumAvgTotal, SumTodayValue, LastUpdated, CSV) 
+VALUES (@r, @s, @a, @t, @u, @csv);";
 
                 up.Parameters.AddWithValue("@r", totalRows);
                 up.Parameters.AddWithValue("@s", totalShares);
                 up.Parameters.AddWithValue("@a", sumAvgTotal);
                 up.Parameters.AddWithValue("@t", sumToday);
-                up.Parameters.AddWithValue("@u",
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                up.Parameters.AddWithValue("@u", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                up.Parameters.AddWithValue("@csv", csvName ?? string.Empty);
 
                 up.ExecuteNonQuery();
                 tx.Commit();
