@@ -384,31 +384,6 @@ partial class Program
     //    return null;
     //}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // Read lightweight WKN lookup table
     static string? GetWknFromDb(string dbPath, string isin)
     {
@@ -2749,16 +2724,16 @@ CREATE TABLE IF NOT EXISTS NEW_TotalValues (
             }
             catch { }
 
-            // derive filename only (no path)
+            // derive CSV identifier to store in NEW_TotalValues
+            // Only store the active CSV id from NEW_CSV_ACTIVE to save space — do NOT store full filename
             var csvName = string.Empty;
             try
             {
-                // prefer the active CSV id recorded in the shared DB when available
                 var activeId = GetActiveCsvIdFromDb(dbPath);
                 if (!string.IsNullOrWhiteSpace(activeId)) csvName = activeId;
-                else csvName = string.IsNullOrWhiteSpace(csvFile) ? string.Empty : Path.GetFileName(csvFile);
+                else csvName = string.Empty; // intentionally avoid storing filename here to save DB space
             }
-            catch { try { csvName = string.IsNullOrWhiteSpace(csvFile) ? string.Empty : Path.GetFileName(csvFile); } catch { csvName = csvFile ?? string.Empty; } }
+            catch { csvName = string.Empty; }
 
             // Insert new row (append)
             try
