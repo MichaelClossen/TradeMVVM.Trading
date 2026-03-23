@@ -54,8 +54,8 @@ namespace TradeMVVM.ReadHoldings
             // apply any restored zoom (RestoreLayout may have set _zoom before Initialize completed)
             try { if (DgScale != null) { DgScale.ScaleX = _zoom; DgScale.ScaleY = _zoom; } } catch { }
             try { LoadLastHoldings(); } catch { }
-            // restore window size and splitter from settings
-            try { RestoreLayout(); } catch { }
+            // restore window size and splitter from settings (disabled)
+            // Layout persistence is disabled per user request.
             // If a last CSV path was restored into the UI, mark it active in the shared DB immediately
             try
             {
@@ -75,18 +75,6 @@ namespace TradeMVVM.ReadHoldings
             try { StartClock(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
-            try { this.Loaded += MainWindow_Loaded; } catch { }
-        }
-
-        private void MainWindow_Loaded(object? sender, RoutedEventArgs e)
-        {
-            try
-            {
-                // ensure ItemsSource is applied and then autosize columns after layout is ready
-                try { if (_holdings != null && _holdings.Count > 0) DgHoldings.ItemsSource = _holdings; } catch { }
-                this.Dispatcher.BeginInvoke(new Action(() => { try { DgHoldings.UpdateLayout(); AutoSizeColumns(); } catch { } }), DispatcherPriority.Loaded);
-            }
-            catch { }
         }
 
         private void DgHoldings_PreviewMouseWheel(object? sender, MouseWheelEventArgs e)
@@ -532,7 +520,7 @@ namespace TradeMVVM.ReadHoldings
             try { _dbTimer?.Dispose(); } catch { }
             try { _refreshTimer?.Stop(); _refreshTimer = null; } catch { }
             try { _clockTimer?.Stop(); _clockTimer = null; } catch { }
-            try { SaveLayout(); } catch { }
+            // Layout persistence disabled: do not save layout on close
             base.OnClosed(e);
         }
 
@@ -887,54 +875,14 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
 
         private void RestoreLayout()
         {
-            try
-            {
-                var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                var file = Path.Combine(appData, "TradeMVVM.ReadHoldings", "layout.json");
-                if (!File.Exists(file)) return;
-                var txt = File.ReadAllText(file, Encoding.UTF8);
-                using var doc = JsonDocument.Parse(txt);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("Width", out var jw) && jw.ValueKind == JsonValueKind.Number) this.Width = jw.GetDouble();
-                if (root.TryGetProperty("Height", out var jh) && jh.ValueKind == JsonValueKind.Number) this.Height = jh.GetDouble();
-                if (root.TryGetProperty("Left", out var jl) && jl.ValueKind == JsonValueKind.Number) this.Left = jl.GetDouble();
-                if (root.TryGetProperty("Top", out var jt) && jt.ValueKind == JsonValueKind.Number) this.Top = jt.GetDouble();
-                if (root.TryGetProperty("ColLeftWidth", out var jcl) && jcl.ValueKind == JsonValueKind.Number) ColLeft.Width = new System.Windows.GridLength(jcl.GetDouble());
-                if (root.TryGetProperty("ColRightWidth", out var jcr) && jcr.ValueKind == JsonValueKind.Number) ColRight.Width = new System.Windows.GridLength(jcr.GetDouble());
-                if (root.TryGetProperty("Zoom", out var jz) && jz.ValueKind == JsonValueKind.Number) {
-                    try { _zoom = jz.GetDouble(); if (DgScale != null) { DgScale.ScaleX = _zoom; DgScale.ScaleY = _zoom; } else { DgHoldings.FontSize = _baseFontSize * _zoom; } } catch { }
-                }
-                if (root.TryGetProperty("LastCsvPath", out var jpath) && jpath.ValueKind == JsonValueKind.String)
-                {
-                    var p = jpath.GetString();
-                    if (!string.IsNullOrWhiteSpace(p)) TxtPath.Text = p;
-                }
-            }
-            catch { }
+            // Layout persistence disabled per user request. Do not read layout.json.
+            return;
         }
 
         private void SaveLayout()
         {
-            try
-            {
-                var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                var dir = Path.Combine(appData, "TradeMVVM.ReadHoldings");
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                var file = Path.Combine(dir, "layout.json");
-                var layoutObj = new
-                {
-                    Width = this.Width,
-                    Height = this.Height,
-                    Left = this.Left,
-                    Top = this.Top,
-                    ColLeftWidth = ColLeft.Width.Value,
-                    ColRightWidth = ColRight.Width.Value,
-                    Zoom = _zoom,
-                    LastCsvPath = TxtPath?.Text ?? string.Empty
-                };
-                File.WriteAllText(file, JsonSerializer.Serialize(layoutObj), Encoding.UTF8);
-            }
-            catch { }
+            // Layout persistence disabled per user request. Do not write layout.json.
+            return;
         }
 
         private void BtnOpenCsv_Click(object sender, RoutedEventArgs e)
