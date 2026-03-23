@@ -75,6 +75,22 @@ namespace TradeMVVM.ReadHoldings
             try { StartClock(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
+
+            // ensure columns are sized to content on first load
+            try { this.Loaded += MainWindow_Loaded; } catch { }
+        }
+
+        private void MainWindow_Loaded(object? sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // ensure layout has finished and then autosize columns
+                this.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { AutoSizeColumns(); } catch { }
+                }), DispatcherPriority.ApplicationIdle);
+            }
+            catch { }
         }
 
         private void DgHoldings_PreviewMouseWheel(object? sender, MouseWheelEventArgs e)
