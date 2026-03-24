@@ -736,12 +736,33 @@ namespace TradeMVVM.Trading.Views.Charts
                 string path = settings?.HoldingsCsvPath;
                 if (string.IsNullOrWhiteSpace(path))
                 {
+                    // If no explicit holdings CSV configured in settings, try to show the
+                    // active CSV recorded in the DB (NEW_CSV_ACTIVE table) so the user
+                    // sees which CSV the UI last opened.
                     try
                     {
+                        var db = new TradeMVVM.Trading.Services.DatabaseService();
+                        var active = db.GetActiveCsvName();
                         var tbNull = this.FindName("TxtHoldingsCsvPath") as System.Windows.Controls.TextBlock;
-                        if (tbNull != null) tbNull.Text = "(nicht konfiguriert)";
+                        if (!string.IsNullOrWhiteSpace(active))
+                        {
+                            if (tbNull != null) tbNull.Text = active;
+                        }
+                        else
+                        {
+                            if (tbNull != null) tbNull.Text = "(nicht konfiguriert)";
+                        }
                     }
-                    catch { }
+                    catch
+                    {
+                        try
+                        {
+                            var tbNull = this.FindName("TxtHoldingsCsvPath") as System.Windows.Controls.TextBlock;
+                            if (tbNull != null) tbNull.Text = "(nicht konfiguriert)";
+                        }
+                        catch { }
+                    }
+
                     return;
                 }
 

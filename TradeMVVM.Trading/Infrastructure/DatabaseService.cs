@@ -168,6 +168,22 @@ namespace TradeMVVM.Trading.Services
                         }
                     }
 
+        // Return the filename of the currently active CSV (Active = 1) from NEW_CSV_ACTIVE table or null.
+        public string GetActiveCsvName()
+        {
+            try
+            {
+                using var conn = new SQLiteConnection(_connection);
+                conn.Open();
+                using var cmd = new SQLiteCommand("SELECT CSV FROM NEW_CSV_ACTIVE WHERE Active = 1 LIMIT 1;", conn);
+                var res = cmd.ExecuteScalar();
+                if (res == null || res == DBNull.Value)
+                    return null;
+                return res.ToString();
+            }
+            catch { return null; }
+        }
+
 
                 }
                 catch (SQLiteException ex) when (IsBusyOrLocked(ex) && attempt < DbLockedRetryCount)
@@ -443,6 +459,34 @@ namespace TradeMVVM.Trading.Services
                 var dir = Path.GetDirectoryName(file);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
+            }
+            catch { }
+
+            // Ensure NEW_CSV_ACTIVE exists and has a uniqueness constraint on CSV so
+            // other clients can rely on a stable row per CSV name.
+            try
+            {
+                using var conn = new SQLiteConnection(_connection);
+                conn.Open();
+                try
+                {
+                    using var cmd = new SQLiteCommand(@"CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE (
+    CSV TEXT PRIMARY KEY,
+    Active INTEGER NOT NULL DEFAULT 0,
+    Created TEXT
+);", conn);
+                    cmd.ExecuteNonQuery();
+                }
+                catch { }
+
+                try
+                {
+                    using var idx = new SQLiteCommand("CREATE UNIQUE INDEX IF NOT EXISTS idx_new_csv_active_csv ON NEW_CSV_ACTIVE (CSV);", conn);
+                    idx.ExecuteNonQuery();
+                }
+                catch { }
+
+                conn.Close();
             }
             catch { }
 

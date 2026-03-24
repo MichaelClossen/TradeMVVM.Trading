@@ -50,22 +50,25 @@ namespace TradeMVVM.ReadHoldings
             InitializeComponent();
             // ensure CSV active table exists as early as possible
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
+
+            // attempt to read active CSV from shared DB and show filename in UI
+            try
+            {
+                var active = GetActiveCsvFromDb(_dbPath);
+                if (!string.IsNullOrWhiteSpace(active))
+                {
+                    try { if (TxtPath != null) TxtPath.Text = active; } catch { }
+                }
+            }
+            catch { }
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
             // apply any restored zoom (RestoreLayout may have set _zoom before Initialize completed)
             try { if (DgScale != null) { DgScale.ScaleX = _zoom; DgScale.ScaleY = _zoom; } } catch { }
             try { LoadLastHoldings(); } catch { }
             // restore window size and splitter from settings (disabled)
             // Layout persistence is disabled per user request.
-            // If a last CSV path was restored into the UI, mark it active in the shared DB immediately
-            try
-            {
-                var restored = TxtPath?.Text;
-                if (!string.IsNullOrWhiteSpace(restored))
-                {
-                    try { SetActiveCsvInDb(_dbPath, restored); } catch { }
-                }
-            }
-            catch { }
+            // On startup, prefer showing the active CSV recorded in the shared DB
+            // (NEW_CSV_ACTIVE table) instead of the default placeholder text.
             // start periodic refresh from DB every 15 seconds to keep purchase/today values up-to-date
             try { StartRefreshTimer(); } catch { }
             // perform one immediate refresh from DB at startup
@@ -78,6 +81,24 @@ namespace TradeMVVM.ReadHoldings
 
             // ensure columns are sized to content on first load
             try { this.Loaded += MainWindow_Loaded; } catch { }
+        }
+
+        // Read the filename of the currently active CSV (Active = 1) from NEW_CSV_ACTIVE
+        private string GetActiveCsvFromDb(string dbPath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return null;
+                var cs = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+                using var conn = new SqliteConnection(cs);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT CSV FROM NEW_CSV_ACTIVE WHERE Active = 1 LIMIT 1;";
+                var res = cmd.ExecuteScalar();
+                if (res == null || res == DBNull.Value) return null;
+                return res.ToString();
+            }
+            catch { return null; }
         }
 
         private void MainWindow_Loaded(object? sender, RoutedEventArgs e)
@@ -175,9 +196,18 @@ namespace TradeMVVM.ReadHoldings
     Created TEXT
 );";
                 cmd.ExecuteNonQuery();
+                try
+                {
+                    using var idx = conn.CreateCommand();
+                    idx.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_new_csv_active_csv ON NEW_CSV_ACTIVE (CSV);";
+                    idx.ExecuteNonQuery();
+                }
+                catch { }
             }
             catch { }
         }
+
+
 
         private void TotalValuesTimer_Tick(object? sender, EventArgs e)
         {
@@ -1009,10 +1039,18 @@ CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE (
 
                         using var ins = conn.CreateCommand();
                         ins.Transaction = tran;
-                        ins.CommandText = @"INSERT OR REPLACE INTO NEW_CSV_ACTIVE (CSV, Active, Created) VALUES (@csv, 1, @created);";
+                        // Insert only if missing, then update existing row so rowid/Id is preserved.
+                        ins.CommandText = @"INSERT OR IGNORE INTO NEW_CSV_ACTIVE (CSV, Active, Created) VALUES (@csv, 1, @created);";
                         ins.Parameters.AddWithValue("@csv", csvName ?? string.Empty);
                         ins.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                         ins.ExecuteNonQuery();
+
+                        using var upd = conn.CreateCommand();
+                        upd.Transaction = tran;
+                        upd.CommandText = @"UPDATE NEW_CSV_ACTIVE SET Active = 1, Created = @created WHERE CSV = @csv;";
+                        upd.Parameters.AddWithValue("@csv", csvName ?? string.Empty);
+                        upd.Parameters.AddWithValue("@created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                        upd.ExecuteNonQuery();
 
                         tran.Commit();
                     }

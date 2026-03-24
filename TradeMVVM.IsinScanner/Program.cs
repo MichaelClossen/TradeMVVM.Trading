@@ -106,7 +106,7 @@ partial class Program
                         c1.CommandText = @"
 CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE_new (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    CSV TEXT,
+    CSV TEXT UNIQUE,
     Active INTEGER,
     Created TEXT
 );";
@@ -134,6 +134,15 @@ SELECT CSV, Active, Created FROM NEW_CSV_ACTIVE;";
 
             try
             {
+                // Ensure CSV column is unique by creating a unique index if missing.
+                try
+                {
+                    using var idxCmd = conn.CreateCommand();
+                    idxCmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_new_csv_active_csv ON NEW_CSV_ACTIVE (CSV);";
+                    idxCmd.ExecuteNonQuery();
+                }
+                catch { }
+
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT Id FROM NEW_CSV_ACTIVE WHERE Active = 1 ORDER BY Created DESC LIMIT 1;";
                 var res = cmd.ExecuteScalar();
