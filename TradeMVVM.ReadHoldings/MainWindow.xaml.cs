@@ -59,19 +59,14 @@ namespace TradeMVVM.ReadHoldings
             {
                 var active = GetActiveCsvFromDb(_dbPath);
                 if (!string.IsNullOrWhiteSpace(active))
-                {
                     try { if (TxtPath != null) TxtPath.Text = active; } catch { }
-                }
             }
             catch { }
+
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
             // apply any restored zoom (RestoreLayout may have set _zoom before Initialize completed)
             try { if (DgScale != null) { DgScale.ScaleX = _zoom; DgScale.ScaleY = _zoom; } } catch { }
             try { LoadLastHoldings(); } catch { }
-            // restore window size and splitter from settings (disabled)
-            // Layout persistence is disabled per user request.
-            // On startup, prefer showing the active CSV recorded in the shared DB
-            // (NEW_CSV_ACTIVE table) instead of the default placeholder text.
             // start periodic refresh from DB every 15 seconds to keep purchase/today values up-to-date
             try { StartRefreshTimer(); } catch { }
             // perform one immediate refresh from DB at startup
@@ -80,12 +75,140 @@ namespace TradeMVVM.ReadHoldings
             try { StartTotalValuesTimer(); } catch { }
             // render initial total value history once controls are loaded
             try { this.Loaded += (s, e) => { LoadAndRenderTotalValueHistory(); }; } catch { }
+            try { PlotTotalValueHistory.PreviewMouseWheel += PlotTotalValueHistory_PreviewMouseWheel; } catch { }
             try { StartClock(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
 
             // ensure columns are sized to content on first load
             try { this.Loaded += MainWindow_Loaded; } catch { }
+        }
+
+        // Mouse wheel zoom handler for the ScottPlot WpfPlot control
+        private void PlotTotalValueHistory_PreviewMouseWheel(object? sender, MouseWheelEventArgs e)
+        {
+            try
+            {
+                if (PlotTotalValueHistory == null) return;
+
+                // get mouse position and convert to data coordinates
+                var pos = e.GetPosition(PlotTotalValueHistory);
+                if (!TryGetMouseCoordinates(PlotTotalValueHistory, pos, out var mouseX, out var mouseY))
+                {
+                    // fallback: use center of current axis range
+                    try
+                    {
+                        mouseX = (PlotTotalValueHistory.Plot.Axes.Bottom.Min + PlotTotalValueHistory.Plot.Axes.Bottom.Max) / 2.0;
+                        mouseY = (PlotTotalValueHistory.Plot.Axes.Left.Min + PlotTotalValueHistory.Plot.Axes.Left.Max) / 2.0;
+                    }
+                    catch { return; }
+                }
+
+                // zoom factor: <1 zooms in, >1 zooms out
+                double factor = e.Delta > 0 ? 1.0 / 1.1 : 1.1;
+
+                var mods = Keyboard.Modifiers;
+
+                double minX = PlotTotalValueHistory.Plot.Axes.Bottom.Min; double maxX = PlotTotalValueHistory.Plot.Axes.Bottom.Max;
+                double minY = PlotTotalValueHistory.Plot.Axes.Left.Min; double maxY = PlotTotalValueHistory.Plot.Axes.Left.Max;
+
+                // helper to scale limits around center
+                static (double, double) ScaleAround(double min, double max, double center, double scale)
+                {
+                    var left = center - (center - min) * scale;
+                    var right = center + (max - center) * scale;
+                    return (left, right);
+                }
+
+                try
+                {
+                    if (mods == ModifierKeys.None)
+                    {
+                        // zoom X only
+                        var (nminX, nmaxX) = ScaleAround(minX, maxX, mouseX, factor);
+                        PlotTotalValueHistory.Plot.Axes.SetLimitsX(nminX, nmaxX);
+                    }
+                    else if ((mods & ModifierKeys.Control) == ModifierKeys.Control && (mods & ModifierKeys.Shift) == ModifierKeys.Shift)
+                    {
+                        // Ctrl+Shift -> Y only
+                        var (nminY, nmaxY) = ScaleAround(minY, maxY, mouseY, factor);
+                        PlotTotalValueHistory.Plot.Axes.SetLimitsY(nminY, nmaxY);
+                    }
+                    else if ((mods & ModifierKeys.Control) == ModifierKeys.Control)
+                    {
+                        // Ctrl -> both axes
+                        var (nminX, nmaxX) = ScaleAround(minX, maxX, mouseX, factor);
+                        var (nminY, nmaxY) = ScaleAround(minY, maxY, mouseY, factor);
+                        PlotTotalValueHistory.Plot.Axes.SetLimitsX(nminX, nmaxX);
+                        PlotTotalValueHistory.Plot.Axes.SetLimitsY(nminY, nmaxY);
+                    }
+                    else
+                    {
+                        // other modifiers: default to X zoom
+                        var (nminX, nmaxX) = ScaleAround(minX, maxX, mouseX, factor);
+                        PlotTotalValueHistory.Plot.Axes.SetLimitsX(nminX, nmaxX);
+                    }
+
+                    PlotTotalValueHistory.Refresh();
+                    e.Handled = true;
+                }
+                catch { }
+            }
+            catch { }
+        }
+
+        private bool TryGetMouseCoordinates(ScottPlot.WPF.WpfPlot plot, System.Windows.Point pos, out double x, out double y)
+        {
+            x = double.NaN; y = double.NaN;
+            try
+            {
+                var plotObj = plot?.Plot;
+                if (plotObj != null)
+                {
+                    var getCoordinates = plotObj.GetType().GetMethods()
+                        .FirstOrDefault(m => string.Equals(m.Name, "GetCoordinates", StringComparison.Ordinal) && m.GetParameters().Length == 2);
+
+                    if (getCoordinates != null)
+                    {
+                        object res = null;
+                        try { res = getCoordinates.Invoke(plotObj, new object[] { pos.X, pos.Y }); } catch { }
+                        if (res != null)
+                        {
+                            var t = res.GetType();
+                            var p1 = t.GetProperty("Item1");
+                            var p2 = t.GetProperty("Item2");
+                            if (p1 != null && p2 != null)
+                            {
+                                try
+                                {
+                                    x = Convert.ToDouble(p1.GetValue(res));
+                                    y = Convert.ToDouble(p2.GetValue(res));
+                                    return true;
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                }
+
+                // fallback: simple linear mapping using axis limits and plot size
+                try
+                {
+                    double minX = plot.Plot.Axes.Bottom.Min;
+                    double maxX = plot.Plot.Axes.Bottom.Max;
+                    double minY = plot.Plot.Axes.Left.Min;
+                    double maxY = plot.Plot.Axes.Left.Max;
+                    double w = plot.ActualWidth; double h = plot.ActualHeight;
+                    if (w <= 0 || h <= 0 || double.IsNaN(minX) || double.IsNaN(maxX) || double.IsNaN(minY) || double.IsNaN(maxY)) return false;
+                    x = minX + (pos.X / w) * (maxX - minX);
+                    // invert Y: screen Y increases downwards
+                    y = maxY - (pos.Y / h) * (maxY - minY);
+                    return true;
+                }
+                catch { }
+            }
+            catch { }
+            return false;
         }
 
         // Load total value history for the active CSV portfolio from NEW_TotalValues and render into ScottPlot
@@ -195,6 +318,8 @@ namespace TradeMVVM.ReadHoldings
                                                 }
                                             }
                                         }
+
+
                                         else if (obj is long l)
                                         {
                                             // treat large numbers as unix milliseconds, medium as unix seconds, small as OADate
@@ -336,7 +461,23 @@ namespace TradeMVVM.ReadHoldings
                                 try { plt.YLabel("Gesamtwert"); } catch { }
 
                                 // ensure X limits fit data so DateTime ticks render correctly
-                                try { if (xs.Length > 0) plt.Axes.SetLimitsX(xs.Min(), xs.Max()); } catch { }
+                                try
+                                {
+                                    if (xs.Length > 0)
+                                    {
+                                        // Default view: show last 1 month (30 days) when data covers a longer span
+                                        var minDt = DateTime.FromOADate(xs.Min());
+                                        var maxDt = DateTime.FromOADate(xs.Max());
+                                        DateTime startDt = minDt;
+                                        if ((maxDt - minDt) > TimeSpan.FromDays(30))
+                                        {
+                                            startDt = maxDt.AddDays(-30);
+                                            if (startDt < minDt) startDt = minDt;
+                                        }
+                                        plt.Axes.SetLimitsX(startDt.ToOADate(), maxDt.ToOADate());
+                                    }
+                                }
+                                catch { }
 
                                 // ensure autoscaling applied (use Axes.AutoScale which exists on this project's ScottPlot version)
                                 try { plt.Axes.AutoScale(); } catch { }
@@ -460,6 +601,27 @@ namespace TradeMVVM.ReadHoldings
                 {
                     try { AutoSizeColumns(); } catch { }
                 }), DispatcherPriority.ApplicationIdle);
+            }
+            catch { }
+        }
+
+        // Open the DatePicker popup immediately when it is loaded (referenced from XAML)
+        private void GewinnVerlust2DateDatum_Loaded(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (sender is DatePicker dp)
+                {
+                    this.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (!dp.SelectedDate.HasValue) dp.SelectedDate = DateTime.Today;
+                            dp.IsDropDownOpen = true;
+                        }
+                        catch { }
+                    }), DispatcherPriority.Background);
+                }
             }
             catch { }
         }
