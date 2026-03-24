@@ -47,6 +47,11 @@ namespace TradeMVVM.ReadHoldings
         private readonly double _maxZoom = 3.0;
         private readonly double _zoomStep = 0.05;
         private double _baseFontSize = 12.0;
+        // cached total-value history times loaded for the plot (used to find nearest point for deletion)
+        private List<DateTime> _totalValueTimes = new List<DateTime>();
+        // cached rowids aligned with _totalValueTimes when available - prefer deletion by rowid for determinism
+        private List<long?> _totalValueRowIds = new List<long?>();
+        private double _totalValueMedianDeltaDays = 1.0;
 
         public MainWindow()
         {
@@ -76,6 +81,7 @@ namespace TradeMVVM.ReadHoldings
             // render initial total value history once controls are loaded
             try { this.Loaded += (s, e) => { LoadAndRenderTotalValueHistory(); }; } catch { }
             try { PlotTotalValueHistory.PreviewMouseWheel += PlotTotalValueHistory_PreviewMouseWheel; } catch { }
+            try { PlotTotalValueHistory.MouseDoubleClick += PlotTotalValueHistory_MouseDoubleClick; } catch { }
             try { StartClock(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
@@ -211,6 +217,122 @@ namespace TradeMVVM.ReadHoldings
             return false;
         }
 
+        // Handle shift-doubleclick on plot: delete corresponding row from NEW_TotalValues
+        private void PlotTotalValueHistory_MouseDoubleClick(object? sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                if (e == null || (Keyboard.Modifiers & ModifierKeys.Shift) != ModifierKeys.Shift) return;
+                if (PlotTotalValueHistory == null) return;
+
+                var pos = e.GetPosition(PlotTotalValueHistory);
+                if (!TryGetMouseCoordinates(PlotTotalValueHistory, pos, out var x, out var y)) return;
+
+                // x is OADate
+                var clicked = DateTime.FromOADate(x);
+
+                // find nearest cached time
+                if (_totalValueTimes == null || _totalValueTimes.Count == 0) return;
+                int bestIdx = -1; double bestDist = double.MaxValue;
+                for (int i = 0; i < _totalValueTimes.Count; i++)
+                {
+                    var d = Math.Abs((_totalValueTimes[i] - clicked).TotalSeconds);
+                    if (d < bestDist) { bestDist = d; bestIdx = i; }
+                }
+
+                        if (bestIdx < 0) return;
+
+                var targetTime = _totalValueTimes[bestIdx];
+                var targetRowId = (_totalValueRowIds != null && bestIdx < _totalValueRowIds.Count) ? _totalValueRowIds[bestIdx] : null;
+
+                // Confirm with user
+                var res = MessageBox.Show(this, $"Zeile mit Zeit {targetTime:yyyy-MM-dd HH:mm:ss} aus NEW_TotalValues löschen?", "Löschen bestätigen", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (res != MessageBoxResult.Yes) return;
+
+                // delete from DB by matching best-effort on timestamp column using tolerant matching
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try
+                    {
+                        var cs = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+                        using var conn = new SqliteConnection(cs);
+                        conn.Open();
+
+                        // detect datetime-like column name
+                        string timeCol = null;
+                        using (var pragma = conn.CreateCommand())
+                        {
+                            pragma.CommandText = "PRAGMA table_info(NEW_TotalValues);";
+                            using var r = pragma.ExecuteReader();
+                            var cols = new List<string>();
+                            while (r.Read()) { try { cols.Add(r.GetString(1)); } catch { } }
+                            var candidates = new[] { "LastUpdated", "Created", "Time", "Timestamp", "CreatedAt" };
+                            timeCol = cols.FirstOrDefault(c => candidates.Any(cc => string.Equals(c, cc, StringComparison.OrdinalIgnoreCase))) ?? cols.FirstOrDefault();
+                        }
+
+                        if (string.IsNullOrWhiteSpace(timeCol)) return;
+
+                        int affected = 0;
+                        // prefer deletion by rowid when available
+                        if (targetRowId.HasValue)
+                        {
+                            try
+                            {
+                                using var cmdRow = conn.CreateCommand();
+                                cmdRow.CommandText = "DELETE FROM NEW_TotalValues WHERE rowid = $id;";
+                                cmdRow.Parameters.AddWithValue("$id", targetRowId.Value);
+                                affected = cmdRow.ExecuteNonQuery();
+                            }
+                            catch { affected = 0; }
+                        }
+
+                        // fallback: perform tolerant delete: try exact text match first, then numeric epoch match +/- median delta
+                        if (affected == 0)
+                        {
+                            using var cmd = conn.CreateCommand();
+                            // try exact text
+                            cmd.CommandText = $"DELETE FROM NEW_TotalValues WHERE \"{timeCol}\" = $t;";
+                            cmd.Parameters.AddWithValue("$t", targetTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                            try { affected = cmd.ExecuteNonQuery(); } catch { affected = 0; }
+
+                            if (affected == 0)
+                            {
+                                // try matching by epoch milliseconds tolerance
+                                try
+                                {
+                                    var ms = new DateTimeOffset(targetTime).ToUnixTimeMilliseconds();
+                                    var tol = (long)Math.Max(1, Math.Round(_totalValueMedianDeltaDays * 24 * 3600 * 1000));
+                                    // delete rows where numeric value is within +/- tol
+                                    cmd.Parameters.Clear();
+                                    cmd.CommandText = $"DELETE FROM NEW_TotalValues WHERE CAST(\"{timeCol}\" AS INTEGER) BETWEEN $low AND $high;";
+                                    cmd.Parameters.AddWithValue("$low", ms - tol);
+                                    cmd.Parameters.AddWithValue("$high", ms + tol);
+                                    affected = cmd.ExecuteNonQuery();
+                                }
+                                catch { }
+                            }
+                        }
+
+                        if (affected > 0)
+                        {
+                            this.Dispatcher.Invoke(() => MessageBox.Show(this, $"Gelöscht: {affected} Zeile(n)", "Erfolg", MessageBoxButton.OK, MessageBoxImage.Information));
+                            // reload plot
+                            LoadAndRenderTotalValueHistory();
+                        }
+                        else
+                        {
+                            this.Dispatcher.Invoke(() => MessageBox.Show(this, "Keine passende Zeile gefunden oder Löschvorgang fehlgeschlagen.", "Info", MessageBoxButton.OK, MessageBoxImage.Information));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        this.Dispatcher.Invoke(() => MessageBox.Show(this, "Fehler beim Löschen: " + ex.Message, "Fehler", MessageBoxButton.OK, MessageBoxImage.Error));
+                    }
+                });
+            }
+            catch { }
+        }
+
         // Load total value history for the active CSV portfolio from NEW_TotalValues and render into ScottPlot
         private void LoadAndRenderTotalValueHistory()
         {
@@ -224,6 +346,8 @@ namespace TradeMVVM.ReadHoldings
                         var activeCsv = GetActiveCsvFromDb(_dbPath);
                         if (string.IsNullOrWhiteSpace(activeCsv)) return;
 
+                        // reset caches for this load
+                        _totalValueRowIds = new List<long?>();
                         var points = new List<(DateTime time, double avg, double today)>();
                         // read from sqlite - detect actual column names for Created and SumTodayValue, optionally filter by portfolio/CSV
                         try
@@ -281,14 +405,15 @@ namespace TradeMVVM.ReadHoldings
 
                             if (!string.IsNullOrWhiteSpace(portfolioCol))
                             {
-                                // allow matching either CSV string or numeric id in portfolio column
-                                cmd.CommandText = $"SELECT \"{createdCol}\", \"{valueAvgCol}\", \"{valueTodayCol}\" FROM NEW_TotalValues WHERE \"{portfolioCol}\" = $portfolio OR \"{portfolioCol}\" = $portfolioId ORDER BY \"{createdCol}\" ASC;";
+                                // include rowid so we can delete specific DB rows reliably later
+                                cmd.CommandText = $"SELECT \"{createdCol}\", \"{valueAvgCol}\", \"{valueTodayCol}\", rowid FROM NEW_TotalValues WHERE \"{portfolioCol}\" = $portfolio OR \"{portfolioCol}\" = $portfolioId ORDER BY \"{createdCol}\" ASC;";
                                 cmd.Parameters.AddWithValue("$portfolio", activeCsvFromDb ?? string.Empty);
                                 cmd.Parameters.AddWithValue("$portfolioId", activeId.HasValue ? (object)activeId.Value : DBNull.Value);
                             }
                             else
                             {
-                                cmd.CommandText = $"SELECT \"{createdCol}\", \"{valueAvgCol}\", \"{valueTodayCol}\" FROM NEW_TotalValues ORDER BY \"{createdCol}\" ASC;";
+                                // include rowid so we can delete specific DB rows reliably later
+                                cmd.CommandText = $"SELECT \"{createdCol}\", \"{valueAvgCol}\", \"{valueTodayCol}\", rowid FROM NEW_TotalValues ORDER BY \"{createdCol}\" ASC;";
                             }
 
                             using var reader = cmd.ExecuteReader();
@@ -343,12 +468,19 @@ namespace TradeMVVM.ReadHoldings
                                     }
                                     catch { }
 
-                                    double avg = 0.0;
-                                    double today = 0.0;
+                                double avg = 0.0;
+                                double today = 0.0;
+                                long rowid = -1;
                                     try { avg = reader.IsDBNull(1) ? 0.0 : Convert.ToDouble(reader.GetValue(1), CultureInfo.InvariantCulture); } catch { }
-                                    try { today = reader.IsDBNull(2) ? 0.0 : Convert.ToDouble(reader.GetValue(2), CultureInfo.InvariantCulture); } catch { }
+                                try { today = reader.IsDBNull(2) ? 0.0 : Convert.ToDouble(reader.GetValue(2), CultureInfo.InvariantCulture); } catch { }
+                                try { if (!reader.IsDBNull(3)) rowid = Convert.ToInt64(reader.GetValue(3)); } catch { }
 
-                                    if (created.HasValue) points.Add((created.Value, avg, today));
+                                    if (created.HasValue)
+                                    {
+                                        points.Add((created.Value, avg, today));
+                                        // store rowid aligned with points
+                                        try { if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>(); _totalValueRowIds.Add(rowid >= 0 ? (long?)rowid : null); } catch { try { if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>(); _totalValueRowIds.Add(null); } catch { } }
+                                    }
                                 }
                                 catch { }
                             }
@@ -363,6 +495,18 @@ namespace TradeMVVM.ReadHoldings
                         var xs = points.Select(p => p.time.ToOADate()).ToArray();
                         var ysAvg = points.Select(p => p.avg).ToArray();
                         var ysToday = points.Select(p => p.today).ToArray();
+                        // ensure _totalValueRowIds aligns with points; if none captured, create placeholders
+                        try
+                        {
+                            if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>();
+                            if (_totalValueRowIds.Count != points.Count)
+                            {
+                                var newIds = new List<long?>();
+                                for (int i = 0; i < points.Count; i++) newIds.Add(i < _totalValueRowIds.Count ? _totalValueRowIds[i] : null);
+                                _totalValueRowIds = newIds;
+                            }
+                        }
+                        catch { }
 
                         // diagnostic logging: sample values (avoid referencing local DB column vars out of scope)
                         try
@@ -475,6 +619,21 @@ namespace TradeMVVM.ReadHoldings
                                             if (startDt < minDt) startDt = minDt;
                                         }
                                         plt.Axes.SetLimitsX(startDt.ToOADate(), maxDt.ToOADate());
+                                        // cache times and rowids for interaction handlers
+                                        try
+                                        {
+                                            _totalValueTimes = xs.Select(o => DateTime.FromOADate(o)).ToList();
+                                            if (_totalValueTimes.Count > 2) _totalValueMedianDeltaDays = (_totalValueTimes.Last() - _totalValueTimes.First()).TotalDays / (_totalValueTimes.Count - 1);
+                                            // ensure rowid list matches times count
+                                            if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>();
+                                            if (_totalValueRowIds.Count != _totalValueTimes.Count)
+                                            {
+                                                var newIds = new List<long?>();
+                                                for (int i = 0; i < _totalValueTimes.Count; i++) newIds.Add(i < _totalValueRowIds.Count ? _totalValueRowIds[i] : null);
+                                                _totalValueRowIds = newIds;
+                                            }
+                                        }
+                                        catch { }
                                     }
                                 }
                                 catch { }
