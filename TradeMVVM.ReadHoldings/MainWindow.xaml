@@ -189,14 +189,14 @@
                 <Border Grid.Column="0" Grid.Row="0" Background="LightSkyBlue">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                         <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gesamtwert"  FontSize="20" HorizontalAlignment="Center" />
-                        <TextBlock Name="TxtTotalValueLeft1" Foreground="#FF666666" FontWeight="Bold" FontSize="40" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Name="TxtTotalValueLeft1" Foreground="#FF666666" FontWeight="Bold" FontSize="35" HorizontalAlignment="Center">0,0</TextBlock>
                     </StackPanel>
                 </Border>
 
                 <Border x:Name="GewinnVerlust" Grid.Column="0" Grid.Row="2" Background="MediumSeaGreen">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                         <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gewinn/Verlust"  FontSize="20" HorizontalAlignment="Center" />
-                        <TextBlock Name="TxtTotalValueLeft2" Foreground="#FF666666" FontWeight="Bold" FontSize="40" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Name="TxtTotalValueLeft2" Foreground="#FF666666" FontWeight="Bold" FontSize="35" HorizontalAlignment="Center">0,0</TextBlock>
                     </StackPanel>
                 </Border>
 
@@ -228,7 +228,7 @@
                 <Border x:Name="GewinnVerlust2Date" Grid.Column="0" Grid.Row="2" Background="MediumSeaGreen">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                         <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gewinn/Verlust"  FontSize="20" HorizontalAlignment="Center" />
-                        <TextBlock Name="TxtTotalValueLeft4" Foreground="#FF666666" FontWeight="Bold" FontSize="40" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Name="TxtTotalValueLeft4" Foreground="#FF666666" FontWeight="Bold" FontSize="35" HorizontalAlignment="Center">0,0</TextBlock>
                     </StackPanel>
                 </Border>
             </Grid>
@@ -259,8 +259,22 @@
                 <RowDefinition Height="8" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <Border Grid.Column="0" Grid.Row="0" Background="AliceBlue">
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 1</TextBlock>
+            <Border Grid.Column="0" Grid.Row="0" Background="White" Padding="6">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock HorizontalAlignment="Center" Foreground="#FF666666" FontWeight="Bold" Text="X-Achse Intervall" />
+                    <WrapPanel Margin="4" HorizontalAlignment="Center">
+                        <CheckBox x:Name="ChkInterval5Min" Content="5min" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval15Min" Content="15min" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval30Min" Content="30min" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval1H" Content="1h" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval6H" Content="6h" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval1D" Content="1T" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval1W" Content="1W" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval1M" Content="1M" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                        <CheckBox x:Name="ChkInterval1Y" Content="1Y" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
+                    </WrapPanel>
+                    <!--<TextBlock HorizontalAlignment="Center" Foreground="#FF666666" FontSize="11" Text="(Keine Auswahl = Standardverhalten)" />-->
+                </StackPanel>
             </Border>
             <Border Grid.Column="0" Grid.Row="2">
                 <!-- Time series plot of Gesamtwert for the active CSV portfolio -->

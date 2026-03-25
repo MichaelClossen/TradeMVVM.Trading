@@ -95,6 +95,25 @@ namespace TradeMVVM.ReadHoldings
             try { PlotTotalValueHistory.MouseLeftButtonUp += PlotTotalValueHistory_MouseLeftButtonUp; } catch { }
             try { PlotTotalValueHistory.PreviewMouseDown += PlotTotalValueHistory_PreviewMouseDown; } catch { }
             try { PlotTotalValueHistory.PreviewMouseUp += PlotTotalValueHistory_PreviewMouseUp; } catch { }
+            // wire up interval checkbox events after InitializeComponent to ensure FindName works
+            try
+            {
+                var names = new[] { "ChkInterval5Min", "ChkInterval15Min", "ChkInterval30Min", "ChkInterval1H", "ChkInterval6H", "ChkInterval1D", "ChkInterval1W", "ChkInterval1M", "ChkInterval1Y" };
+                foreach (var n in names)
+                {
+                    try
+                    {
+                        var cb = this.FindName(n) as CheckBox;
+                        if (cb != null)
+                        {
+                            cb.Checked += IntervalCheckbox_Checked;
+                            cb.Unchecked += IntervalCheckbox_Unchecked;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
             try { StartClock(); } catch { }
             try { StartPeriodicReapply(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
@@ -102,6 +121,180 @@ namespace TradeMVVM.ReadHoldings
 
             // ensure columns are sized to content on first load
             try { this.Loaded += MainWindow_Loaded; } catch { }
+        }
+
+        // Interval checkbox handlers (right area 1)
+        private bool _suspendIntervalHandlers = false;
+        // when user selects an interval, remember it so render logic can respect it across reloads
+        private TimeSpan? _forcedInterval = null;
+        private bool _forcedIntervalUserSet = false;
+
+        private void IntervalCheckbox_Checked(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (!(sender is CheckBox cb)) return;
+                var names = new[] { "ChkInterval5Min", "ChkInterval15Min", "ChkInterval30Min", "ChkInterval1H", "ChkInterval6H", "ChkInterval1D", "ChkInterval1W", "ChkInterval1M", "ChkInterval1Y" };
+                try
+                {
+                    _suspendIntervalHandlers = true;
+                    foreach (var n in names)
+                    {
+                        try
+                        {
+                            if (n == cb.Name) continue;
+                            var other = this.FindName(n) as CheckBox;
+                            if (other != null && other.IsChecked == true) other.IsChecked = false;
+                        }
+                        catch { }
+                    }
+                }
+                finally { _suspendIntervalHandlers = false; }
+
+                var ts = GetTimeSpanForCheckbox(cb.Name);
+                _forcedInterval = ts;
+                _forcedIntervalUserSet = true;
+                ApplyXAxisInterval(ts);
+            }
+            catch { }
+        }
+
+        private void IntervalCheckbox_Unchecked(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_suspendIntervalHandlers) return;
+                var names = new[] { "ChkInterval5Min", "ChkInterval15Min", "ChkInterval30Min", "ChkInterval1H", "ChkInterval6H", "ChkInterval1D", "ChkInterval1W", "ChkInterval1M", "ChkInterval1Y" };
+                bool any = false;
+                foreach (var n in names)
+                {
+                    try { var other = this.FindName(n) as CheckBox; if (other != null && other.IsChecked == true) { any = true; break; } } catch { }
+                }
+                if (!any)
+                {
+                    _forcedInterval = null;
+                    _forcedIntervalUserSet = false;
+                    ApplyXAxisInterval(null);
+                }
+            }
+            catch { }
+        }
+
+        private TimeSpan? GetTimeSpanForCheckbox(string name)
+        {
+            return name switch
+            {
+                "ChkInterval5Min" => TimeSpan.FromMinutes(5),
+                "ChkInterval15Min" => TimeSpan.FromMinutes(15),
+                "ChkInterval30Min" => TimeSpan.FromMinutes(30),
+                "ChkInterval1H" => TimeSpan.FromHours(1),
+                "ChkInterval6H" => TimeSpan.FromHours(6),
+                "ChkInterval1D" => TimeSpan.FromDays(1),
+                "ChkInterval1W" => TimeSpan.FromDays(7),
+                "ChkInterval1M" => TimeSpan.FromDays(30),
+                "ChkInterval1Y" => TimeSpan.FromDays(365),
+                _ => null,
+            };
+        }
+
+        // Apply a fixed X-axis interval (TimeSpan) or restore default if null
+        private void ApplyXAxisInterval(TimeSpan? interval)
+        {
+            try
+            {
+                if (PlotTotalValueHistory == null) return;
+                var plt = PlotTotalValueHistory.Plot;
+                if (plt == null) return;
+
+                if (interval.HasValue)
+                {
+                    try
+                    {
+                        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                        Type manualType = null;
+                        foreach (var a in assemblies)
+                        {
+                            try { manualType = a.GetType("ScottPlot.TickGenerators.DateTimeManual"); } catch { }
+                            if (manualType != null) break;
+                        }
+                        object generator = null;
+                        if (manualType != null)
+                        {
+                            var ct = manualType.GetConstructors().FirstOrDefault();
+                            if (ct != null)
+                            {
+                                var pars = ct.GetParameters();
+                                if (pars.Length == 1 && pars[0].ParameterType == typeof(TimeSpan)) generator = Activator.CreateInstance(manualType, interval.Value);
+                                else if (pars.Length == 1 && pars[0].ParameterType == typeof(double)) generator = Activator.CreateInstance(manualType, interval.Value.TotalDays);
+                                else try { generator = Activator.CreateInstance(manualType); } catch { generator = null; }
+                            }
+                            if (generator != null)
+                            {
+                                try
+                                {
+                                    var lfProp = manualType.GetProperty("LabelFormatter");
+                                    if (lfProp != null && lfProp.CanWrite && lfProp.PropertyType == typeof(Func<DateTime, string>)) lfProp.SetValue(generator, new Func<DateTime, string>(d => d.ToString("dd.MM HH:mm")));
+                                }
+                                catch { }
+                                try { var bottom = plt.Axes.Bottom; var prop = bottom.GetType().GetProperty("TickGenerator"); if (prop != null && prop.CanWrite) prop.SetValue(bottom, generator); } catch { }
+                            }
+                        }
+                        if (plt.Axes.Bottom.TickGenerator == null)
+                        {
+                            try { plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic() { LabelFormatter = (DateTime date) => { try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); } } }; } catch { }
+                        }
+                    }
+                    catch { }
+                }
+                else
+                {
+                    try { plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic() { LabelFormatter = (DateTime date) => { try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); } } }; } catch { }
+                }
+                // Also adjust X axis limits to show the selected interval if we have data and the view allows shifting.
+                try
+                {
+                    if (interval.HasValue && _totalValueTimes != null && _totalValueTimes.Count > 0)
+                    {
+                        var dataMax = _totalValueTimes.Last().ToOADate();
+                        var dataMin = _totalValueTimes.First().ToOADate();
+                        var spanDays = interval.Value.TotalDays;
+                        var chosenMax = dataMax + 0.05 * spanDays; // place last point ~5% from right edge
+                        var chosenMin = chosenMax - spanDays;
+                        if (chosenMin < dataMin)
+                        {
+                            chosenMin = dataMin;
+                            chosenMax = chosenMin + spanDays;
+                        }
+
+                        // respect the "rightmost 5%" rule: only shift if previous view had newest data within rightmost 5% or no valid prev limits
+                        try
+                        {
+                            var prevMin = plt.Axes.Bottom.Min;
+                            var prevMax = plt.Axes.Bottom.Max;
+                            bool apply = false;
+                            if (double.IsNaN(prevMin) || double.IsNaN(prevMax) || prevMax <= prevMin) apply = true;
+                            else
+                            {
+                                var prevWidth = prevMax - prevMin;
+                                if (prevWidth > 0 && dataMax > prevMax - 0.05 * prevWidth) apply = true;
+                            }
+
+                            // if the interval was explicitly chosen by the user, force apply so checkbox selection takes effect
+                            try { if (_forcedIntervalUserSet) apply = true; } catch { }
+
+                            if (apply)
+                            {
+                                try { plt.Axes.SetLimitsX(chosenMin, chosenMax); } catch { }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+
+                try { PlotTotalValueHistory.Refresh(); } catch { }
+            }
+            catch { }
         }
 
         // Mouse wheel zoom handler for the ScottPlot WpfPlot control
