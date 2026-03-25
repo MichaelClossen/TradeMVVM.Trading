@@ -37,6 +37,8 @@ namespace TradeMVVM.ReadHoldings
         private DispatcherTimer? _refreshTimer;
         // timer to refresh header totals from DB every 60 seconds
         private DispatcherTimer? _totalValuesTimer;
+        // periodic reapply timer to enforce stored X limits every N seconds (workaround for Hot Reload / ScottPlot resets)
+        private DispatcherTimer? _reapplyPeriodicTimer;
         // ScottPlot control for total value history (bound from XAML)
         // prevent DB writes on startup when loading existing data
         private bool _allowDbWrites = false;
@@ -52,6 +54,12 @@ namespace TradeMVVM.ReadHoldings
         // cached rowids aligned with _totalValueTimes when available - prefer deletion by rowid for determinism
         private List<long?> _totalValueRowIds = new List<long?>();
         private double _totalValueMedianDeltaDays = 1.0;
+        // whether the user has interacted with the plot to change X-axis view (pan/zoom)
+        private bool _plotUserZoomed = false;
+        // explicit store of last user-set X limits when they zoom/pan so we can reliably restore/shift them
+        private double? _userXMin = null;
+        private double? _userXMax = null;
+        // reference to checkbox in XAML to enable/disable automatic X-axis shifting
 
         public MainWindow()
         {
@@ -82,7 +90,11 @@ namespace TradeMVVM.ReadHoldings
             try { this.Loaded += (s, e) => { LoadAndRenderTotalValueHistory(); }; } catch { }
             try { PlotTotalValueHistory.PreviewMouseWheel += PlotTotalValueHistory_PreviewMouseWheel; } catch { }
             try { PlotTotalValueHistory.MouseDoubleClick += PlotTotalValueHistory_MouseDoubleClick; } catch { }
+            try { PlotTotalValueHistory.MouseLeftButtonUp += PlotTotalValueHistory_MouseLeftButtonUp; } catch { }
+            try { PlotTotalValueHistory.PreviewMouseDown += PlotTotalValueHistory_PreviewMouseDown; } catch { }
+            try { PlotTotalValueHistory.PreviewMouseUp += PlotTotalValueHistory_PreviewMouseUp; } catch { }
             try { StartClock(); } catch { }
+            try { StartPeriodicReapply(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
 
@@ -133,6 +145,7 @@ namespace TradeMVVM.ReadHoldings
                         // zoom X only
                         var (nminX, nmaxX) = ScaleAround(minX, maxX, mouseX, factor);
                         PlotTotalValueHistory.Plot.Axes.SetLimitsX(nminX, nmaxX);
+                        try { _userXMin = nminX; _userXMax = nmaxX; } catch { }
                     }
                     else if ((mods & ModifierKeys.Control) == ModifierKeys.Control && (mods & ModifierKeys.Shift) == ModifierKeys.Shift)
                     {
@@ -147,15 +160,19 @@ namespace TradeMVVM.ReadHoldings
                         var (nminY, nmaxY) = ScaleAround(minY, maxY, mouseY, factor);
                         PlotTotalValueHistory.Plot.Axes.SetLimitsX(nminX, nmaxX);
                         PlotTotalValueHistory.Plot.Axes.SetLimitsY(nminY, nmaxY);
+                        try { _userXMin = nminX; _userXMax = nmaxX; } catch { }
                     }
                     else
                     {
                         // other modifiers: default to X zoom
                         var (nminX, nmaxX) = ScaleAround(minX, maxX, mouseX, factor);
                         PlotTotalValueHistory.Plot.Axes.SetLimitsX(nminX, nmaxX);
+                        try { _userXMin = nminX; _userXMax = nmaxX; } catch { }
                     }
 
                     PlotTotalValueHistory.Refresh();
+                        // note: user performed a zoom interaction; preserve X limits on subsequent renders
+                        try { _plotUserZoomed = true; } catch { }
                     e.Handled = true;
                 }
                 catch { }
@@ -215,6 +232,57 @@ namespace TradeMVVM.ReadHoldings
             }
             catch { }
             return false;
+        }
+
+        // handle mouse up to detect user interaction end (panning via mouse drag)
+        private void PlotTotalValueHistory_MouseLeftButtonUp(object? sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                // any mouse interaction should mark that the user has adjusted the view
+                _plotUserZoomed = true;
+                // capture current axis limits as user's preferred limits
+                try
+                {
+                    if (PlotTotalValueHistory != null)
+                    {
+                        var plt = PlotTotalValueHistory.Plot;
+                        _userXMin = plt.Axes.Bottom.Min;
+                        _userXMax = plt.Axes.Bottom.Max;
+                    }
+                }
+                catch { }
+            }
+            catch { }
+        }
+
+        private void PlotTotalValueHistory_PreviewMouseDown(object? sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                // user starts interacting; do not auto-shift while interactions are active
+                _plotUserZoomed = true;
+            }
+            catch { }
+        }
+
+        private void PlotTotalValueHistory_PreviewMouseUp(object? sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                // interaction ended: store current limits
+                try
+                {
+                    if (PlotTotalValueHistory != null)
+                    {
+                        var plt = PlotTotalValueHistory.Plot;
+                        _userXMin = plt.Axes.Bottom.Min;
+                        _userXMax = plt.Axes.Bottom.Max;
+                    }
+                }
+                catch { }
+            }
+            catch { }
         }
 
         // Handle shift-doubleclick on plot: delete corresponding row from NEW_TotalValues
@@ -329,6 +397,77 @@ namespace TradeMVVM.ReadHoldings
                         this.Dispatcher.Invoke(() => MessageBox.Show(this, "Fehler beim Löschen: " + ex.Message, "Fehler", MessageBoxButton.OK, MessageBoxImage.Error));
                     }
                 });
+            }
+            catch { }
+        }
+
+        // Start a periodic timer that reapplies stored X limits every 5 seconds to keep user zoom stable
+        private void StartPeriodicReapply()
+        {
+            try
+            {
+                // If already running, restart
+                try { _reapplyPeriodicTimer?.Stop(); } catch { }
+                _reapplyPeriodicTimer = new DispatcherTimer();
+                _reapplyPeriodicTimer.Interval = TimeSpan.FromSeconds(5);
+                _reapplyPeriodicTimer.Tick += (s, e) =>
+                {
+                    try
+                    {
+                        if (PlotTotalValueHistory == null) return;
+                        // respect user toggle (access checkbox via FindName to avoid duplicate member ambiguity)
+                        try { if (!(((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true)) return; } catch { return; }
+
+                        var plt = PlotTotalValueHistory.Plot;
+
+                        // use cached loaded times to determine latest data point
+                        if (_totalValueTimes == null || _totalValueTimes.Count == 0)
+                        {
+                            // nothing to shift to
+                            return;
+                        }
+
+                        try
+                        {
+                            double prevMin = plt.Axes.Bottom.Min;
+                            double prevMax = plt.Axes.Bottom.Max;
+                            if (double.IsNaN(prevMin) || double.IsNaN(prevMax) || prevMax <= prevMin) return;
+
+                            double prevWidth = prevMax - prevMin;
+                            // newest data time
+                            double dataMax = _totalValueTimes.Last().ToOADate();
+
+                            // if newest data is within rightmost 5% of window, shift window right to include it
+                            if (prevWidth > 0 && dataMax > prevMax - 0.05 * prevWidth)
+                            {
+                                var shift = 0.05 * prevWidth;
+                                double chosenMax = dataMax + shift;
+                                double chosenMin = chosenMax - prevWidth;
+
+                                // ensure not before earliest data
+                                double dataMin = _totalValueTimes.First().ToOADate();
+                                if (chosenMin < dataMin)
+                                {
+                                    chosenMin = dataMin;
+                                    chosenMax = chosenMin + prevWidth;
+                                }
+
+                                try
+                                {
+                                    plt.Axes.SetLimitsX(chosenMin, chosenMax);
+                                    PlotTotalValueHistory.Refresh();
+                                    System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
+                                    // if user had zoomed, treat this as the new stored user limits so reapply keeps it
+                                    try { if (_plotUserZoomed) { _userXMin = chosenMin; _userXMax = chosenMax; } } catch { }
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+                    }
+                    catch { }
+                };
+                _reapplyPeriodicTimer.Start();
             }
             catch { }
         }
@@ -531,6 +670,28 @@ namespace TradeMVVM.ReadHoldings
                             {
                                 if (PlotTotalValueHistory == null) return;
                                 var plt = PlotTotalValueHistory.Plot;
+                                // computed chosen limits (populated when new data is processed)
+                                double? computedChosenMin = null, computedChosenMax = null;
+                                // if the user previously zoomed/panned, prefer the stored user limits (_userXMin/_userXMax).
+                                // Also capture the current plot axis limits BEFORE clearing so we can compute the previous window width reliably.
+                                double? userPrevMin = null, userPrevMax = null;
+                                double? prevAxisMin = null, prevAxisMax = null;
+                                double? prevYMin = null, prevYMax = null;
+                                try
+                                {
+                                    if (_plotUserZoomed)
+                                    {
+                                        userPrevMin = _userXMin;
+                                        userPrevMax = _userXMax;
+                                    }
+                                    // try to read current plot limits (may be useful when not user-zoomed)
+                                    try { prevAxisMin = plt.Axes.Bottom.Min; } catch { prevAxisMin = null; }
+                                    try { prevAxisMax = plt.Axes.Bottom.Max; } catch { prevAxisMax = null; }
+                                    try { prevYMin = plt.Axes.Left.Min; } catch { prevYMin = null; }
+                                    try { prevYMax = plt.Axes.Left.Max; } catch { prevYMax = null; }
+                                }
+                                catch { }
+                                // clear the plot for re-render
                                 plt.Clear();
 
                                 // ScottPlot expects double[] Xs in OADate for DateTime axis. Use Add.Scatter which accepts Xs and Ys.
@@ -609,16 +770,81 @@ namespace TradeMVVM.ReadHoldings
                                 {
                                     if (xs.Length > 0)
                                     {
-                                        // Default view: show last 1 month (30 days) when data covers a longer span
-                                        var minDt = DateTime.FromOADate(xs.Min());
-                                        var maxDt = DateTime.FromOADate(xs.Max());
-                                        DateTime startDt = minDt;
-                                        if ((maxDt - minDt) > TimeSpan.FromDays(30))
+                                        // compute data bounds in OADate
+                                        double dataMin = xs.Min();
+                                        double dataMax = xs.Max();
+
+                                        // determine base previous limits: prefer user's previous limits when they zoomed
+                                        // otherwise use the axis limits captured before clearing (prevAxisMin/prevAxisMax)
+                                        double? prevMin = null, prevMax = null;
+                                        try
                                         {
-                                            startDt = maxDt.AddDays(-30);
-                                            if (startDt < minDt) startDt = minDt;
+                                            if (_plotUserZoomed && userPrevMin.HasValue && userPrevMax.HasValue)
+                                            {
+                                                prevMin = userPrevMin;
+                                                prevMax = userPrevMax;
+                                            }
+                                            else
+                                            {
+                                                prevMin = prevAxisMin ?? plt.Axes.Bottom.Min;
+                                                prevMax = prevAxisMax ?? plt.Axes.Bottom.Max;
+                                            }
                                         }
-                                        plt.Axes.SetLimitsX(startDt.ToOADate(), maxDt.ToOADate());
+                                        catch { }
+
+                                        // debug: log incoming and previous bounds
+                                        try
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"TVH: dataMax={dataMax} prevMin={prevMin} prevMax={prevMax} _userXMin={_userXMin} _userXMax={_userXMax} _plotUserZoomed={_plotUserZoomed}");
+                                        }
+                                        catch { }
+
+                                        double chosenMin = double.NaN, chosenMax = double.NaN;
+
+                                        if (prevMin.HasValue && prevMax.HasValue && !double.IsNaN(prevMin.Value) && !double.IsNaN(prevMax.Value) && prevMax.Value > prevMin.Value)
+                                        {
+                                            // keep current width to preserve zoom
+
+                                            // if new data extends into the rightmost 5% of the previous window, slide the window so the newest data is visible
+                                            var prevWidth = prevMax.Value - prevMin.Value;
+                                            if (prevWidth > 0 && dataMax > prevMax.Value - 0.05 * prevWidth)
+                                            {
+                                                // keep the previous window width (prevWidth)
+                                                // set new right edge to latest data time + 5% of the window width,
+                                                // then compute left edge as right - prevWidth.
+                                                var shift = 0.05 * prevWidth;
+                                                chosenMax = dataMax + shift; // extend slightly beyond newest point
+                                                chosenMin = chosenMax - prevWidth;
+
+                                                // don't go before earliest data
+                                                if (chosenMin < dataMin)
+                                                {
+                                                    chosenMin = dataMin;
+                                                    chosenMax = chosenMin + prevWidth;
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // preserve current view entirely
+                                                chosenMin = prevMin.Value;
+                                                chosenMax = prevMax.Value;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // no previous limits -> default view: show last 1 month (30 days) when data covers a longer span
+                                            var minDt = DateTime.FromOADate(dataMin);
+                                            var maxDt = DateTime.FromOADate(dataMax);
+                                            DateTime startDt = minDt;
+                                            if ((maxDt - minDt) > TimeSpan.FromDays(30))
+                                            {
+                                                startDt = maxDt.AddDays(-30);
+                                                if (startDt < minDt) startDt = minDt;
+                                            }
+                                            chosenMin = startDt.ToOADate();
+                                            chosenMax = maxDt.ToOADate();
+                                        }
+
                                         // cache times and rowids for interaction handlers
                                         try
                                         {
@@ -634,12 +860,109 @@ namespace TradeMVVM.ReadHoldings
                                             }
                                         }
                                         catch { }
+
+                                        // autoscale Y only when automatic shifting/auto-mode is enabled.
+                                        // Respect the user's checkbox: when automatic shifting/autoscale is disabled, do not modify Y limits.
+                                        try
+                                        {
+                                            bool autoEnabledForAxes = false;
+                                            try { autoEnabledForAxes = ((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true; } catch { }
+
+                                            if (!autoEnabledForAxes)
+                                            {
+                                                // User disabled automatic shifting/autoscale -> restore previous Y limits (if available)
+                                                try
+                                                {
+                                                    if (prevYMin.HasValue && prevYMax.HasValue && prevYMax.Value > prevYMin.Value)
+                                                    {
+                                                        plt.Axes.SetLimitsY(prevYMin.Value, prevYMax.Value);
+                                                    }
+                                                }
+                                                catch { }
+                                            }
+                                            else
+                                            {
+                                                if (!_plotUserZoomed)
+                                                {
+                                                    // let ScottPlot choose sensible axes when no user zoom is active
+                                                    try { plt.Axes.AutoScale(); } catch { }
+                                                }
+                                                else
+                                                {
+                                                    // compute Y range from series data and apply a small padding
+                                                    try
+                                                    {
+                                                        double minY = double.PositiveInfinity;
+                                                        double maxY = double.NegativeInfinity;
+                                                        if (ysAvg != null && ysAvg.Length > 0)
+                                                        {
+                                                            minY = Math.Min(minY, ysAvg.Min());
+                                                            maxY = Math.Max(maxY, ysAvg.Max());
+                                                        }
+                                                        if (ysToday != null && ysToday.Length > 0)
+                                                        {
+                                                            minY = Math.Min(minY, ysToday.Min());
+                                                            maxY = Math.Max(maxY, ysToday.Max());
+                                                        }
+                                                        if (!(double.IsInfinity(minY) || double.IsInfinity(maxY)))
+                                                        {
+                                                            var range = Math.Max(1e-9, maxY - minY);
+                                                            var pad = range * 0.05;
+                                                            plt.Axes.SetLimitsY(minY - pad, maxY + pad);
+                                                        }
+                                                    }
+                                                    catch { }
+                                                }
+                                            }
+                                        }
+                                        catch { }
+
+                                        try { if (!double.IsNaN(chosenMin) && !double.IsNaN(chosenMax)) plt.Axes.SetLimitsX(chosenMin, chosenMax); } catch { }
+
+                                        // do NOT overwrite the user's explicit X limits when adjusting the view programmatically.
+                                        // Keep _userXMin/_userXMax set only by direct user interactions (mouse wheel),
+                                        // so the user's zoom remains preserved across renders / hot-reload.
+
+                                        // remember chosen limits for later reapply
+                                        try
+                                        {
+                                            // check UI toggle: only enable automatic X-shift when checkbox is checked
+                                            bool autoShiftEnabledLocal = false;
+                                            try { autoShiftEnabledLocal = ((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true; } catch { }
+
+                                            // only treat computedChosen as a "shift" candidate when we actually moved the window
+                                            bool computedShift = false;
+                                            try
+                                            {
+                                                if (prevMin.HasValue && prevMax.HasValue && prevMax.Value > prevMin.Value)
+                                                {
+                                                    var prevWidth = prevMax.Value - prevMin.Value;
+                                                    if (prevWidth > 0 && dataMax > prevMax.Value - 0.05 * prevWidth)
+                                                        computedShift = true;
+                                                }
+                                            }
+                                            catch { }
+
+                                            if (computedShift && autoShiftEnabledLocal)
+                                            {
+                                                computedChosenMin = double.IsNaN(chosenMin) ? null : (double?)chosenMin;
+                                                computedChosenMax = double.IsNaN(chosenMax) ? null : (double?)chosenMax;
+                                            }
+                                            else
+                                            {
+                                                // no shift requested or auto-shift disabled -> don't propose computed shift
+                                                computedChosenMin = null;
+                                                computedChosenMax = null;
+                                            }
+                                        }
+                                        catch { }
+                                        // debug: log chosen limits
+                                        try { System.Diagnostics.Debug.WriteLine($"TVH: chosenMin={chosenMin} chosenMax={chosenMax}"); } catch { }
                                     }
                                 }
                                 catch { }
 
-                                // ensure autoscaling applied (use Axes.AutoScale which exists on this project's ScottPlot version)
-                                try { plt.Axes.AutoScale(); } catch { }
+                                // no further autoscale here; X limits are reapplied below when appropriate
 
                                 // set labels on series and show legend
                                 try
@@ -719,8 +1042,98 @@ namespace TradeMVVM.ReadHoldings
                                 }
                                 catch { }
 
+                                // Reapply final X limits. Prefer user-set limits when user zoomed, but if a computed shift
+                                // was determined (computedChosenMin/Max != null) apply that shift and update the stored
+                                // user limits so the shifted window becomes the new preserved view.
+                                try
+                                {
+                                    double? applyMin = null, applyMax = null;
+                                    bool appliedShift = false;
+                                    if (_plotUserZoomed)
+                                    {
+                                        // if a computed shift was prepared (new data near right edge), prefer that and
+                                        // update stored user limits so the shifted window is preserved
+                                        if (computedChosenMin.HasValue && computedChosenMax.HasValue)
+                                        {
+                                            applyMin = computedChosenMin;
+                                            applyMax = computedChosenMax;
+                                            try { _userXMin = applyMin; _userXMax = applyMax; } catch { }
+                                            appliedShift = true;
+                                        }
+                                        else
+                                        {
+                                            applyMin = _userXMin ?? userPrevMin;
+                                            applyMax = _userXMax ?? userPrevMax;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // use computed chosen limits if available, otherwise fall back to previous axis
+                                        applyMin = computedChosenMin ?? prevAxisMin ?? (double?)null;
+                                        applyMax = computedChosenMax ?? prevAxisMax ?? (double?)null;
+                                    }
+                                    try { System.Diagnostics.Debug.WriteLine($"TVH: applying final X limits applyMin={applyMin} applyMax={applyMax} _plotUserZoomed={_plotUserZoomed} appliedShift={appliedShift}"); } catch { }
+                                    if (applyMin.HasValue && applyMax.HasValue && !double.IsNaN(applyMin.Value) && !double.IsNaN(applyMax.Value) && applyMax.Value > applyMin.Value)
+                                    {
+                                        try { plt.Axes.SetLimitsX(applyMin.Value, applyMax.Value); } catch (Exception ex) { try { System.Diagnostics.Debug.WriteLine("TVH: SetLimitsX failed: " + ex.Message); } catch { } }
+                                        // log actual axis values after setting to detect overwrites
+                                        try { System.Diagnostics.Debug.WriteLine($"TVH: after SetLimitsX actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}"); } catch { }
+                                    }
+                                }
+                                catch { }
+
                                 // redraw
                                 try { PlotTotalValueHistory.Refresh(); } catch { }
+
+                                // Defensive reapply: some ScottPlot versions may reset axis after Refresh;
+                                // reapply user X limits once more and refresh to ensure right edge is preserved.
+                                try
+                                {
+                                    double? finalMin = _userXMin ?? userPrevMin;
+                                    double? finalMax = _userXMax ?? userPrevMax;
+                                    if (finalMin.HasValue && finalMax.HasValue && finalMax.Value > finalMin.Value)
+                                    {
+                                        try { plt.Axes.SetLimitsX(finalMin.Value, finalMax.Value); } catch { }
+                                        try { PlotTotalValueHistory.Refresh(); } catch { }
+                                    }
+                                }
+                                catch { }
+                                // Schedule repeated deferred reapply attempts to work around Hot Reload / ScottPlot race conditions.
+                                try
+                                {
+                                    double? deferredMin = _userXMin ?? userPrevMin;
+                                    double? deferredMax = _userXMax ?? userPrevMax;
+                                    if (deferredMin.HasValue && deferredMax.HasValue && deferredMax.Value > deferredMin.Value)
+                                    {
+                                        // apply immediately once (best-effort)
+                                        try { plt.Axes.SetLimitsX(deferredMin.Value, deferredMax.Value); PlotTotalValueHistory.Refresh(); } catch { }
+
+                                        // then schedule a few repeated reapply attempts at increasing intervals
+                                        var reapplyTimer = new DispatcherTimer();
+                                        int attempts = 0;
+                                        // double the number of checks and use a smaller base interval so updates occur sooner
+                                        reapplyTimer.Interval = TimeSpan.FromMilliseconds(100);
+                                        reapplyTimer.Tick += (ts, te) =>
+                                        {
+                                            try
+                                            {
+                                                attempts++;
+                                                plt.Axes.SetLimitsX(deferredMin.Value, deferredMax.Value);
+                                                PlotTotalValueHistory.Refresh();
+                                            }
+                                            catch { }
+                                            try
+                                            {
+                                                // previously stopped at 3 attempts; double to 6
+                                                if (attempts >= 6) reapplyTimer.Stop();
+                                                else reapplyTimer.Interval = TimeSpan.FromMilliseconds(100 * (attempts + 1));
+                                            }
+                                            catch { }
+                                        };
+                                        reapplyTimer.Start();
+                                    }
+                                }
+                                catch { }
                                 try { Mouse.OverrideCursor = null; } catch { }
                             }
                             catch { }
@@ -1291,6 +1704,7 @@ protected override void OnClosed(EventArgs e)
     try { _dbTimer?.Dispose(); } catch { }
     try { _refreshTimer?.Stop(); _refreshTimer = null; } catch { }
     try { _clockTimer?.Stop(); _clockTimer = null; } catch { }
+            try { _reapplyPeriodicTimer?.Stop(); _reapplyPeriodicTimer = null; } catch { }
     // Layout persistence disabled: do not save layout on close
     base.OnClosed(e);
 }

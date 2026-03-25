@@ -45,6 +45,7 @@
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <Button Name="BtnOpenCsv" Width="70" Height="28" Click="BtnOpenCsv_Click">CSV öffnen...</Button>
                         <Button Name="BtnExportCsv" Width="70" Height="28" Margin="8,0,0,0" Click="BtnExportCsv_Click">Export CSV</Button>
+                        <CheckBox x:Name="ChkAutoShiftX" Margin="8,0,0,0" VerticalAlignment="Center" IsChecked="True">Automatische X-Verschiebung</CheckBox>
                     </StackPanel>
 
                     <!--<TextBlock Name="TxtPath" Grid.Column="1" Margin="8,4,0,0" VerticalAlignment="Center">Kein Pfad ausgewählt</TextBlock>-->
@@ -239,7 +240,7 @@
         </Grid>
 
 
-        <GridSplitter    Grid.Column="3" Width="8" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ShowsPreview="True"/>
+        <!--<GridSplitter    Grid.Column="3" Width="8" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ShowsPreview="True"/>-->
 
 
         <Grid  Grid.Column="4" >
