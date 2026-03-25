@@ -59,6 +59,8 @@ namespace TradeMVVM.ReadHoldings
         // explicit store of last user-set X limits when they zoom/pan so we can reliably restore/shift them
         private double? _userXMin = null;
         private double? _userXMax = null;
+        // whether initial plot render has completed (used to detect "no previous limits" at first load)
+        private bool _plotInitialized = false;
         // reference to checkbox in XAML to enable/disable automatic X-axis shifting
 
         public MainWindow()
@@ -750,17 +752,86 @@ namespace TradeMVVM.ReadHoldings
                                 }
                                 catch { }
 
-                                // format bottom axis as DateTime using DateTimeAutomatic tick generator
+                                // format bottom axis as DateTime. Prefer a manual 15-minute tick generator when available
                                 try
                                 {
                                     plt.Axes.DateTimeTicksBottom();
-                                    plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic()
+
+                                    // attempt to prefer a DateTimeManual tick generator with 15-minute spacing (if ScottPlot version exposes it)
+                                    try
                                     {
-                                        LabelFormatter = (DateTime date) =>
+                                        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                                        Type manualType = null;
+                                        foreach (var a in assemblies)
                                         {
-                                            try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); }
+                                            try { manualType = a.GetType("ScottPlot.TickGenerators.DateTimeManual"); } catch { }
+                                            if (manualType != null) break;
                                         }
-                                    };
+
+                                        object generator = null;
+                                        if (manualType != null)
+                                        {
+                                            // prefer ctor(TimeSpan) or ctor(double days)
+                                            var ct = manualType.GetConstructors().FirstOrDefault();
+                                            if (ct != null)
+                                            {
+                                                var pars = ct.GetParameters();
+                                                if (pars.Length == 1 && pars[0].ParameterType == typeof(TimeSpan))
+                                                {
+                                                    generator = Activator.CreateInstance(manualType, TimeSpan.FromMinutes(15));
+                                                }
+                                                else if (pars.Length == 1 && pars[0].ParameterType == typeof(double))
+                                                {
+                                                    // double often represents days in OADate units
+                                                    generator = Activator.CreateInstance(manualType, TimeSpan.FromMinutes(15).TotalDays);
+                                                }
+                                                else
+                                                {
+                                                    try { generator = Activator.CreateInstance(manualType); } catch { generator = null; }
+                                                }
+                                            }
+
+                                                if (generator != null)
+                                                {
+                                                    // set a friendly label formatter when supported
+                                                    try
+                                                    {
+                                                        var lfProp = manualType.GetProperty("LabelFormatter");
+                                                        if (lfProp != null && lfProp.CanWrite && lfProp.PropertyType == typeof(Func<DateTime, string>))
+                                                        {
+                                                            lfProp.SetValue(generator, new Func<DateTime, string>(d => d.ToString("dd.MM HH:mm")));
+                                                        }
+                                                    }
+                                                    catch { }
+
+                                                    try
+                                                    {
+                                                        var bottom = plt.Axes.Bottom;
+                                                        var prop = bottom.GetType().GetProperty("TickGenerator");
+                                                        if (prop != null && prop.CanWrite)
+                                                            prop.SetValue(bottom, generator);
+                                                    }
+                                                    catch { }
+                                                }
+                                        }
+
+                                        // fallback: if we couldn't create a manual generator, use the automatic one with a formatter
+                                        if (manualType == null || plt.Axes.Bottom.TickGenerator == null)
+                                        {
+                                            try
+                                            {
+                                                plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic()
+                                                {
+                                                    LabelFormatter = (DateTime date) =>
+                                                    {
+                                                        try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); }
+                                                    }
+                                                };
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                    catch { }
                                 }
                                 catch { }
                                 try { plt.YLabel("Gesamtwert"); } catch { }
@@ -776,10 +847,18 @@ namespace TradeMVVM.ReadHoldings
 
                                         // determine base previous limits: prefer user's previous limits when they zoomed
                                         // otherwise use the axis limits captured before clearing (prevAxisMin/prevAxisMax)
+                                        // Treat the very first render specially: if we have not initialized the plot yet,
+                                        // force prevMin/prevMax to null so the "no previous limits" branch executes and
+                                        // the initial 5-minute window is applied.
                                         double? prevMin = null, prevMax = null;
                                         try
                                         {
-                                            if (_plotUserZoomed && userPrevMin.HasValue && userPrevMax.HasValue)
+                                            if (!_plotInitialized)
+                                            {
+                                                prevMin = null;
+                                                prevMax = null;
+                                            }
+                                            else if (_plotUserZoomed && userPrevMin.HasValue && userPrevMax.HasValue)
                                             {
                                                 prevMin = userPrevMin;
                                                 prevMax = userPrevMax;
@@ -832,17 +911,31 @@ namespace TradeMVVM.ReadHoldings
                                         }
                                         else
                                         {
-                                            // no previous limits -> default view: show last 1 month (30 days) when data covers a longer span
-                                            var minDt = DateTime.FromOADate(dataMin);
-                                            var maxDt = DateTime.FromOADate(dataMax);
-                                            DateTime startDt = minDt;
-                                            if ((maxDt - minDt) > TimeSpan.FromDays(30))
+                                            // no previous limits -> default view: show a 5-minute window ending slightly after the
+                                            // newest data point so the last timestamp sits ~5% from the right edge.
+                                            try
                                             {
-                                                startDt = maxDt.AddDays(-30);
-                                                if (startDt < minDt) startDt = minDt;
+                                                // target window length in days (5 minutes)
+                                                double spanDays = TimeSpan.FromMinutes(5).TotalDays;
+                                                // place right edge slightly after newest data point (5% of window)
+                                                chosenMax = dataMax + 0.05 * spanDays;
+                                                chosenMin = chosenMax - spanDays;
+
+                                                // don't go before earliest data
+                                                if (chosenMin < dataMin)
+                                                {
+                                                    chosenMin = dataMin;
+                                                    chosenMax = chosenMin + spanDays;
+                                                }
                                             }
-                                            chosenMin = startDt.ToOADate();
-                                            chosenMax = maxDt.ToOADate();
+                                            catch
+                                            {
+                                                // fallback: last 5 minutes relative to now
+                                                var now = DateTime.Now;
+                                                var start = now.AddMinutes(-5);
+                                                chosenMin = start.ToOADate();
+                                                chosenMax = now.ToOADate();
+                                            }
                                         }
 
                                         // cache times and rowids for interaction handlers
@@ -950,9 +1043,27 @@ namespace TradeMVVM.ReadHoldings
                                             }
                                             else
                                             {
-                                                // no shift requested or auto-shift disabled -> don't propose computed shift
-                                                computedChosenMin = null;
-                                                computedChosenMax = null;
+                                                // If there were no previous axis limits (first load) and auto-shift is enabled,
+                                                // apply the freshly computed chosen limits so the initial view shows the last 5 minutes.
+                                                try
+                                                {
+                                                    if ((!prevMin.HasValue || !prevMax.HasValue) && autoShiftEnabledLocal)
+                                                    {
+                                                        computedChosenMin = double.IsNaN(chosenMin) ? null : (double?)chosenMin;
+                                                        computedChosenMax = double.IsNaN(chosenMax) ? null : (double?)chosenMax;
+                                                    }
+                                                    else
+                                                    {
+                                                        // no shift requested or auto-shift disabled -> don't propose computed shift
+                                                        computedChosenMin = null;
+                                                        computedChosenMax = null;
+                                                    }
+                                                }
+                                                catch
+                                                {
+                                                    computedChosenMin = null;
+                                                    computedChosenMax = null;
+                                                }
                                             }
                                         }
                                         catch { }
@@ -1135,6 +1246,7 @@ namespace TradeMVVM.ReadHoldings
                                 }
                                 catch { }
                                 try { Mouse.OverrideCursor = null; } catch { }
+                                try { _plotInitialized = true; } catch { }
                             }
                             catch { }
                         }), DispatcherPriority.Background);

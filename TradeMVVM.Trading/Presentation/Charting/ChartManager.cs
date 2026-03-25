@@ -207,26 +207,103 @@ namespace TradeMVVM.Trading.Chart
         {
             _plot.Plot.Axes.DateTimeTicksBottom();
 
-            _plot.Plot.Axes.Bottom.TickGenerator =
-                new ScottPlot.TickGenerators.DateTimeAutomatic()
+            // Prefer a DateTimeManual tick generator with 15-minute spacing when available (ScottPlot versions vary).
+            try
+            {
+                Type manualType = null;
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
                 {
-                    LabelFormatter = (DateTime date) =>
+                    try { manualType = a.GetType("ScottPlot.TickGenerators.DateTimeManual"); } catch { }
+                    if (manualType != null) break;
+                }
+
+                if (manualType != null)
+                {
+                    object generator = null;
+                    try
                     {
-                        double min = _plot.Plot.Axes.Bottom.Min;
-                        double max = _plot.Plot.Axes.Bottom.Max;
-
-                        TimeSpan visible =
-                            TimeSpan.FromDays(max - min);
-
-                        if (visible.TotalMinutes <= 10)
-                            return date.ToString("HH:mm:ss");
-
-                        if (visible.TotalDays <= 1)
-                            return date.ToString("HH:mm");
-
-                        return date.ToString("dd.MM HH:mm");
+                        var ct = manualType.GetConstructors().FirstOrDefault();
+                        if (ct != null)
+                        {
+                            var pars = ct.GetParameters();
+                            if (pars.Length == 1 && pars[0].ParameterType == typeof(TimeSpan))
+                                generator = Activator.CreateInstance(manualType, TimeSpan.FromMinutes(15));
+                            else if (pars.Length == 1 && pars[0].ParameterType == typeof(double))
+                                generator = Activator.CreateInstance(manualType, TimeSpan.FromMinutes(15).TotalDays);
+                            else
+                                generator = Activator.CreateInstance(manualType);
+                        }
                     }
-                };
+                    catch { generator = null; }
+
+                    if (generator != null)
+                    {
+                        try
+                        {
+                            var lfProp = manualType.GetProperty("LabelFormatter");
+                            if (lfProp != null && lfProp.CanWrite && lfProp.PropertyType == typeof(Func<DateTime, string>))
+                                lfProp.SetValue(generator, new Func<DateTime, string>(d => d.ToString("dd.MM HH:mm")));
+                        }
+                        catch { }
+
+                        try
+                        {
+                            var bottom = _plot.Plot.Axes.Bottom;
+                            var prop = bottom.GetType().GetProperty("TickGenerator");
+                            if (prop != null && prop.CanWrite) prop.SetValue(bottom, generator);
+                        }
+                        catch { }
+                    }
+                }
+
+                if (_plot.Plot.Axes.Bottom.TickGenerator == null)
+                {
+                    _plot.Plot.Axes.Bottom.TickGenerator =
+                        new ScottPlot.TickGenerators.DateTimeAutomatic()
+                        {
+                            LabelFormatter = (DateTime date) =>
+                            {
+                                double min = _plot.Plot.Axes.Bottom.Min;
+                                double max = _plot.Plot.Axes.Bottom.Max;
+
+                                TimeSpan visible =
+                                    TimeSpan.FromDays(max - min);
+
+                                if (visible.TotalMinutes <= 10)
+                                    return date.ToString("HH:mm:ss");
+
+                                if (visible.TotalDays <= 1)
+                                    return date.ToString("HH:mm");
+
+                                return date.ToString("dd.MM HH:mm");
+                            }
+                        };
+                }
+            }
+            catch
+            {
+                // fallback to automatic
+                _plot.Plot.Axes.Bottom.TickGenerator =
+                    new ScottPlot.TickGenerators.DateTimeAutomatic()
+                    {
+                        LabelFormatter = (DateTime date) =>
+                        {
+                            double min = _plot.Plot.Axes.Bottom.Min;
+                            double max = _plot.Plot.Axes.Bottom.Max;
+
+                            TimeSpan visible =
+                                TimeSpan.FromDays(max - min);
+
+                            if (visible.TotalMinutes <= 10)
+                                return date.ToString("HH:mm:ss");
+
+                            if (visible.TotalDays <= 1)
+                                return date.ToString("HH:mm");
+
+                            return date.ToString("dd.MM HH:mm");
+                        }
+                    };
+            }
 
             _plot.Plot.Axes.Left.Label.Text = "%";
             // Note: Custom numeric tick formatting removed due to ScottPlot API changes
