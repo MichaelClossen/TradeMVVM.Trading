@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Net;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -61,6 +62,10 @@ namespace TradeMVVM.ReadHoldings
         private double? _userXMax = null;
         // whether initial plot render has completed (used to detect "no previous limits" at first load)
         private bool _plotInitialized = false;
+        // UDP listener for Firefox extension notifications
+        private System.Net.Sockets.UdpClient? _udpListener = null;
+        private DispatcherTimer? _udpStatusTimer = null;
+        private readonly int _udpPort = 54123;
         // reference to checkbox in XAML to enable/disable automatic X-axis shifting
 
         public MainWindow()
@@ -116,11 +121,24 @@ namespace TradeMVVM.ReadHoldings
             catch { }
             try { StartClock(); } catch { }
             try { StartPeriodicReapply(); } catch { }
+            try { StartUdpListener(); } catch { }
+            try { StartUdpStatusTimer(); } catch { }
+            try { StartHttpListener(); } catch { }
             // Ensure the NEW_CSV_ACTIVE table exists on startup so other tools can read active CSV state
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
 
             // ensure columns are sized to content on first load
             try { this.Loaded += MainWindow_Loaded; } catch { }
+        }
+
+        public void BtnClearNotifications_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var lb = this.FindName("LstRightArea4") as System.Windows.Controls.ListBox;
+                if (lb != null) lb.Items.Clear();
+            }
+            catch { }
         }
 
         // Interval checkbox handlers (right area 1)
@@ -663,6 +681,165 @@ namespace TradeMVVM.ReadHoldings
                     catch { }
                 };
                 _reapplyPeriodicTimer.Start();
+            }
+            catch { }
+        }
+
+        // Start a simple UDP listener on localhost for incoming notifications from Firefox extension
+        private void StartUdpListener()
+        {
+            try
+            {
+                StopUdpListener();
+                _udpListener = new System.Net.Sockets.UdpClient(_udpPort);
+                _udpListener.Client.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket, System.Net.Sockets.SocketOptionName.ReuseAddress, true);
+
+                // receive loop on thread pool
+                System.Threading.ThreadPool.QueueUserWorkItem(async _ =>
+                {
+                    try
+                    {
+                        while (_udpListener != null)
+                        {
+                            var res = await _udpListener.ReceiveAsync();
+                            try
+                            {
+                                var msg = System.Text.Encoding.UTF8.GetString(res.Buffer);
+                                this.Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    try
+                                    {
+                                        var lb = this.FindName("LstRightArea4") as System.Windows.Controls.ListBox;
+                                        if (lb != null)
+                                        {
+                                            lb.Items.Insert(0, $"{DateTime.Now:HH:mm:ss} - {msg}");
+                                            // keep list short
+                                            while (lb.Items.Count > 200) lb.Items.RemoveAt(lb.Items.Count - 1);
+                                        }
+                                    }
+                                    catch { }
+                                }));
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+        }
+
+        private void StopUdpListener()
+        {
+            try
+            {
+                try { _udpListener?.Close(); } catch { }
+                try { _udpListener?.Dispose(); } catch { }
+                _udpListener = null;
+            }
+            catch { }
+        }
+
+        private void StartUdpStatusTimer()
+        {
+            try
+            {
+                _udpStatusTimer?.Stop();
+                _udpStatusTimer = new DispatcherTimer();
+                _udpStatusTimer.Interval = TimeSpan.FromSeconds(5);
+                _udpStatusTimer.Tick += (s, e) =>
+                {
+                    try
+                    {
+                        var tb = this.FindName("TxtUdpInfo") as System.Windows.Controls.TextBlock;
+                        if (tb != null)
+                        {
+                            if (_udpListener != null)
+                                tb.Text = $"UDP listener: port {_udpPort} (listening)";
+                            else
+                                tb.Text = $"UDP listener: port {_udpPort} (stopped)";
+                        }
+                    }
+                    catch { }
+                };
+                _udpStatusTimer.Start();
+            }
+            catch { }
+        }
+
+        // Simple HTTP listener fallback so extension can POST messages to http://127.0.0.1:54123/notify
+        private HttpListener? _httpListener = null;
+
+        private void StartHttpListener()
+        {
+            try
+            {
+                StopHttpListener();
+                _httpListener = new HttpListener();
+                _httpListener.Prefixes.Add("http://127.0.0.1:54123/");
+                _httpListener.Start();
+
+                System.Threading.ThreadPool.QueueUserWorkItem(async _ =>
+                {
+                    try
+                    {
+                        while (_httpListener != null && _httpListener.IsListening)
+                        {
+                            var ctx = await _httpListener.GetContextAsync();
+                            try
+                            {
+                                string body = string.Empty;
+                                try
+                                {
+                                    using var sr = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                                    body = await sr.ReadToEndAsync();
+                                }
+                                catch { }
+
+                                try
+                                {
+                                    ctx.Response.StatusCode = 200;
+                                    var respBytes = System.Text.Encoding.UTF8.GetBytes("OK");
+                                    ctx.Response.OutputStream.Write(respBytes, 0, respBytes.Length);
+                                }
+                                catch { }
+                                finally { try { ctx.Response.Close(); } catch { } }
+
+                                // dispatch message to UI
+                                try
+                                {
+                                    this.Dispatcher.BeginInvoke(new Action(() =>
+                                    {
+                                        try
+                                        {
+                                            var lb = this.FindName("LstRightArea4") as System.Windows.Controls.ListBox;
+                                            if (lb != null)
+                                            {
+                                                lb.Items.Insert(0, $"{DateTime.Now:HH:mm:ss} - {body}");
+                                                while (lb.Items.Count > 200) lb.Items.RemoveAt(lb.Items.Count - 1);
+                                            }
+                                        }
+                                        catch { }
+                                    }));
+                                }
+                                catch { }
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                });
+            }
+            catch { }
+        }
+
+        private void StopHttpListener()
+        {
+            try
+            {
+                try { if (_httpListener != null && _httpListener.IsListening) _httpListener.Stop(); } catch { }
+                try { _httpListener?.Close(); } catch { }
+                _httpListener = null;
             }
             catch { }
         }
@@ -2010,6 +2187,8 @@ protected override void OnClosed(EventArgs e)
     try { _refreshTimer?.Stop(); _refreshTimer = null; } catch { }
     try { _clockTimer?.Stop(); _clockTimer = null; } catch { }
             try { _reapplyPeriodicTimer?.Stop(); _reapplyPeriodicTimer = null; } catch { }
+            try { _udpStatusTimer?.Stop(); _udpStatusTimer = null; } catch { }
+            try { StopUdpListener(); } catch { }
     // Layout persistence disabled: do not save layout on close
     base.OnClosed(e);
 }

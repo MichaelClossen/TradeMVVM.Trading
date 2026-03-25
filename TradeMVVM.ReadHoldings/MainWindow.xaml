@@ -45,7 +45,6 @@
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <Button Name="BtnOpenCsv" Width="70" Height="28" Click="BtnOpenCsv_Click">CSV öffnen...</Button>
                         <Button Name="BtnExportCsv" Width="70" Height="28" Margin="8,0,0,0" Click="BtnExportCsv_Click">Export CSV</Button>
-                        <CheckBox x:Name="ChkAutoShiftX" Margin="8,0,0,0" VerticalAlignment="Center" IsChecked="True">Automatische X-Verschiebung</CheckBox>
                     </StackPanel>
                 </Grid>
 
@@ -53,7 +52,7 @@
                     <TextBlock Name="TxtInfo" Margin="0,0,0,6" Text="" />
                     <TextBlock Name="Sep" Margin="5,0,5,6" Text="|" />
                     <TextBlock Name="TxtPath" Margin="0,0,0,6">Kein Pfad ausgewählt</TextBlock>
-             </StackPanel>
+                </StackPanel>
 
                 <!-- summary removed: numbers above the list disabled -->
             </StackPanel>
@@ -162,7 +161,7 @@
 
         <Grid  Grid.Column="2" >
             <Grid.RowDefinitions>
-                <RowDefinition Height="56" />
+                <RowDefinition Height="70" />
                 <RowDefinition Height="8" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="8" />
@@ -171,10 +170,11 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="8" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="8" />
             </Grid.RowDefinitions>
 
 
-            <Border Grid.Row="0">
+            <Border Grid.Row="0" Background="DodgerBlue">
                 <TextBlock Name="TxtClock"  VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="Bold" FontSize="32">--:--:--</TextBlock>
             </Border>
 
@@ -232,8 +232,8 @@
                     </StackPanel>
                 </Border>
             </Grid>
-            
-            
+
+
             <Border Grid.Column="0" Grid.Row="6" Background="AliceBlue">
                 <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Links - Bereich 3</TextBlock>
             </Border>
@@ -249,7 +249,7 @@
 
         <Grid  Grid.Column="4" >
             <Grid.RowDefinitions>
-                <RowDefinition Height="56" />
+                <RowDefinition Height="70" />
                 <RowDefinition Height="8" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="8" />
@@ -258,6 +258,7 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="8" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="8" />
             </Grid.RowDefinitions>
             <Border Grid.Column="0" Grid.Row="0" Background="White" Padding="6">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -273,6 +274,7 @@
                         <CheckBox x:Name="ChkInterval1M" Content="1M" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
                         <CheckBox x:Name="ChkInterval1Y" Content="1Y" Margin="2" Checked="IntervalCheckbox_Checked" Unchecked="IntervalCheckbox_Unchecked" />
                     </WrapPanel>
+                    <CheckBox x:Name="ChkAutoShiftX" Content="Automatische X-Verschiebung" Margin="4,0,4,0" HorizontalAlignment="Center" IsChecked="True" />
                     <!--<TextBlock HorizontalAlignment="Center" Foreground="#FF666666" FontSize="11" Text="(Keine Auswahl = Standardverhalten)" />-->
                 </StackPanel>
             </Border>
@@ -286,11 +288,9 @@
             <Border Grid.Column="0" Grid.Row="6" Background="AliceBlue">
                 <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 3</TextBlock>
             </Border>
-            <Border Grid.Column="0" Grid.Row="8" Background="AliceBlue">
+            <Border Grid.Column="0" Grid.Row="8" Padding="6" Background="AliceBlue">
                 <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 4</TextBlock>
             </Border>
-
         </Grid>
-
     </Grid>
 </Window>

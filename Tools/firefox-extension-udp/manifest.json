@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "name": "TradeMVVM UDP Notifier Forwarder",
+  "version": "0.1",
+  "description": "Captures page notifications and forwards them via UDP to localhost (port 54123 by default).",
+  "permissions": [
+    "sockets.udp",
+    "<all_urls>",
+    "storage"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "trade-udp-forwarder@example.com",
+      "strict_min_version": "91.0"
+    }
+  }
+}
