@@ -30,7 +30,7 @@
         <!-- Left: controls above holdings table -->
         <Grid Grid.Column="0" Margin="8">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
+                <RowDefinition Height="70"/>
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -45,13 +45,15 @@
                     <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <Button Name="BtnOpenCsv" Width="70" Height="28" Click="BtnOpenCsv_Click">CSV öffnen...</Button>
                         <Button Name="BtnExportCsv" Width="70" Height="28" Margin="8,0,0,0" Click="BtnExportCsv_Click">Export CSV</Button>
+                        <TextBox x:Name="TxtSearch" Width="150" Height="28" Margin="8,0,0,0" VerticalAlignment="Center" FontSize="18" ToolTip="Suche in ISIN, Name, Provider" TextChanged="TxtSearch_TextChanged" KeyDown="TxtSearch_KeyDown" />
                     </StackPanel>
+
                 </Grid>
 
                 <StackPanel Grid.Row="1" Orientation="Horizontal">
-                    <TextBlock Name="TxtInfo" Margin="0,0,0,6" Text="" />
-                    <TextBlock Name="Sep" Margin="5,0,5,6" Text="|" />
-                    <TextBlock Name="TxtPath" Margin="0,0,0,6">Kein Pfad ausgewählt</TextBlock>
+                    <TextBlock Name="TxtInfo" Margin="0,4,0,6" Text=""/>
+                    <TextBlock Name="Sep" Margin="5,4,5,6" Text="|" />
+                    <TextBlock Name="TxtPath" Margin="0,4,0,6">Kein Pfad ausgewählt</TextBlock>
                 </StackPanel>
 
                 <!-- summary removed: numbers above the list disabled -->
@@ -188,15 +190,18 @@
 
                 <Border Grid.Column="0" Grid.Row="0" Background="LightSkyBlue">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gesamtwert"  FontSize="20" HorizontalAlignment="Center" />
-                        <TextBlock Name="TxtTotalValueLeft1" Foreground="#FF666666" FontWeight="Bold" FontSize="35" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gesamtwert Today"  FontSize="20" HorizontalAlignment="Center" />
+                        <TextBlock Name="TxtTotalValueLeft1" Foreground="#FF666666" FontWeight="Bold" FontSize="25" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gesamtwert Buy"  FontSize="20" HorizontalAlignment="Center" />
+                        <TextBlock Name="TxtTotalValueLeft3" Foreground="#FF666666" FontWeight="Bold" FontSize="25" HorizontalAlignment="Center">0,0</TextBlock>
                     </StackPanel>
                 </Border>
 
                 <Border x:Name="GewinnVerlust" Grid.Column="0" Grid.Row="2" Background="MediumSeaGreen">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                         <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gewinn/Verlust"  FontSize="20" HorizontalAlignment="Center" />
-                        <TextBlock Name="TxtTotalValueLeft2" Foreground="#FF666666" FontWeight="Bold" FontSize="35" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Portfolio heute"  FontSize="20" HorizontalAlignment="Center" />
+                        <TextBlock Name="TxtTotalValueLeft2" Foreground="#FF666666" FontWeight="Bold" FontSize="25" HorizontalAlignment="Center">0,0</TextBlock>
                     </StackPanel>
                 </Border>
 
@@ -214,8 +219,10 @@
                 <Border Grid.Column="0" Grid.Row="0">
 
                     <Calendar Name="GewinnVerlust2DateDatum"
-              HorizontalAlignment="Center"
-              VerticalAlignment="Center">
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              Loaded="GewinnVerlust2DateDatum_Loaded"
+                              SelectedDatesChanged="GewinnVerlust2DateDatum_SelectedDatesChanged">
 
                         <Calendar.LayoutTransform>
                             <ScaleTransform ScaleX="0.95"
@@ -227,8 +234,10 @@
                 </Border>
                 <Border x:Name="GewinnVerlust2Date" Grid.Column="0" Grid.Row="2" Background="MediumSeaGreen">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Gewinn/Verlust"  FontSize="20" HorizontalAlignment="Center" />
-                        <TextBlock Name="TxtTotalValueLeft4" Foreground="#FF666666" FontWeight="Bold" FontSize="35" HorizontalAlignment="Center">0,0</TextBlock>
+                        <TextBlock Foreground="#FF666666" FontWeight="Bold" Text="Wert Portfolio"  FontSize="20" HorizontalAlignment="Center" />
+                        <TextBlock Foreground="#FF666666" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center"
+                                   Text="{Binding SelectedDate, ElementName=GewinnVerlust2DateDatum, StringFormat={}{0:dd.MM.yyyy}, TargetNullValue='-'}" />
+                        <TextBlock Name="TxtTotalValueLeft4" Foreground="#FF666666" FontWeight="Bold" FontSize="25" HorizontalAlignment="Center">0,0</TextBlock>
                     </StackPanel>
                 </Border>
             </Grid>
