@@ -87,6 +87,8 @@ namespace TradeMVVM.ReadHoldings
                 if (!string.IsNullOrWhiteSpace(active))
                     try { if (TxtPath != null) TxtPath.Text = active; } catch { }
             }
+
+
             catch { }
 
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
@@ -102,6 +104,7 @@ namespace TradeMVVM.ReadHoldings
             // render initial total value history once controls are loaded
             try { this.Loaded += (s, e) => { LoadAndRenderTotalValueHistory(); }; } catch { }
             try { PlotTotalValueHistory.PreviewMouseWheel += PlotTotalValueHistory_PreviewMouseWheel; } catch { }
+            // MouseWheel handler will be hooked after constructor ends (method defined below)
             try { PlotTotalValueHistory.MouseDoubleClick += PlotTotalValueHistory_MouseDoubleClick; } catch { }
             try { PlotTotalValueHistory.MouseLeftButtonUp += PlotTotalValueHistory_MouseLeftButtonUp; } catch { }
             try { PlotTotalValueHistory.PreviewMouseDown += PlotTotalValueHistory_PreviewMouseDown; } catch { }
@@ -123,6 +126,17 @@ namespace TradeMVVM.ReadHoldings
                     }
                     catch { }
                 }
+                // wire up auto-shift checkbox to allow immediate re-enabling of automatic shifting after user zoom
+                try
+                {
+                    var auto = this.FindName("ChkAutoShiftX") as CheckBox;
+                    if (auto != null)
+                    {
+                        auto.Checked += (s, ev) => { try { AutoShiftCheckbox_Checked(s, ev); } catch { } };
+                        auto.Unchecked += (s, ev) => { try { AutoShiftCheckbox_Unchecked(s, ev); } catch { } };
+                    }
+                }
+                catch { }
                 // Default to 15min interval via checkbox on startup (handlers wired above)
                 try
                 {
@@ -156,6 +170,33 @@ namespace TradeMVVM.ReadHoldings
                 if (btn != null) btn.Click += BtnClearSearch_Click;
             }
             catch { }
+        }
+        private void AutoShiftCheckbox_Checked(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                _plotUserZoomed = false;
+
+                // optional: sofort neu zeichnen
+                LoadAndRenderTotalValueHistory();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+
+        private void AutoShiftCheckbox_Unchecked(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Benutzer übernimmt Kontrolle
+                _plotUserZoomed = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
         }
 
         // Search/filter the holdings shown in the DataGrid
@@ -357,26 +398,59 @@ namespace TradeMVVM.ReadHoldings
             try
             {
                 if (_suspendIntervalHandlers) return;
-                var names = new[] { "ChkInterval5Min", "ChkInterval15Min", "ChkInterval30Min", "ChkInterval1H", "ChkInterval6H", "ChkInterval1D", "ChkInterval1W", "ChkInterval1M", "ChkInterval1Y" };
-                bool any = false;
-                foreach (var n in names)
+
+                // Delay processing slightly to allow the Checked handler from the newly checked box
+                // to run first. This avoids a brief state where no checkbox is checked and the
+                // Unchecked handler clears the forced interval before the new Checked handler sets it.
+                try
                 {
-                    try { var other = this.FindName(n) as CheckBox; if (other != null && other.IsChecked == true) { any = true; break; } } catch { }
-                }
-                if (!any)
-                {
-                    _forcedInterval = null;
-                    _forcedIntervalUserSet = false;
-                    try { SuppressAutoApplyFor(800); } catch { }
-                    try { System.Diagnostics.Debug.WriteLine("TVH: Interval checkbox unchecked, clearing forced interval"); } catch { }
-                    try
+                    this.Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        this.Dispatcher.BeginInvoke(new Action(() => { try { var info = this.FindName("TxtInfo") as TextBlock; if (info != null) info.Text = $"Intervall gelöscht @ {DateTime.Now:HH:mm:ss}"; } catch { } }));
+                        try
+                        {
+                            var names = new[] { "ChkInterval5Min", "ChkInterval15Min", "ChkInterval30Min", "ChkInterval1H", "ChkInterval6H", "ChkInterval1D", "ChkInterval1W", "ChkInterval1M", "ChkInterval1Y" };
+                            bool any = false;
+                            foreach (var n in names)
+                            {
+                                try { var other = this.FindName(n) as CheckBox; if (other != null && other.IsChecked == true) { any = true; break; } } catch { }
+                            }
+                            if (!any)
+                            {
+                                _forcedInterval = null;
+                                _forcedIntervalUserSet = false;
+                                try { SuppressAutoApplyFor(800); } catch { }
+                                try { System.Diagnostics.Debug.WriteLine("TVH: Interval checkbox unchecked, clearing forced interval"); } catch { }
+                                try
+                                {
+                                    try { var info = this.FindName("TxtInfo") as TextBlock; if (info != null) info.Text = $"Intervall gelöscht @ {DateTime.Now:HH:mm:ss}"; } catch { }
+                                }
+                                catch { }
+                                try { ApplyXAxisInterval(null); } catch { }
+                                try { LoadAndRenderTotalValueHistory(); } catch { }
+                                try { ScheduleApplyInterval(null); } catch { }
+                            }
+                        }
+                        catch { }
+                    }), System.Windows.Threading.DispatcherPriority.Background);
+                }
+                catch
+                {
+                    // fallback to immediate processing on error
+                    var names = new[] { "ChkInterval5Min", "ChkInterval15Min", "ChkInterval30Min", "ChkInterval1H", "ChkInterval6H", "ChkInterval1D", "ChkInterval1W", "ChkInterval1M", "ChkInterval1Y" };
+                    bool any = false;
+                    foreach (var n in names)
+                    {
+                        try { var other = this.FindName(n) as CheckBox; if (other != null && other.IsChecked == true) { any = true; break; } } catch { }
                     }
-                    catch { }
-                    try { ApplyXAxisInterval(null); } catch { }
-                    try { LoadAndRenderTotalValueHistory(); } catch { }
-                    try { ScheduleApplyInterval(null); } catch { }
+                    if (!any)
+                    {
+                        _forcedInterval = null;
+                        _forcedIntervalUserSet = false;
+                        try { System.Diagnostics.Debug.WriteLine("TVH: Interval checkbox unchecked, clearing forced interval (fallback)"); } catch { }
+                        try { ApplyXAxisInterval(null); } catch { }
+                        try { LoadAndRenderTotalValueHistory(); } catch { }
+                        try { ScheduleApplyInterval(null); } catch { }
+                    }
                 }
             }
             catch { }
@@ -921,8 +995,9 @@ namespace TradeMVVM.ReadHoldings
                             // newest data time
                             double dataMax = _totalValueTimes.Last().ToOADate();
 
-                            // if newest data is within rightmost 5% of window, shift window right to include it
-                            if (prevWidth > 0 && dataMax > prevMax - 0.05 * prevWidth)
+                            // When automatic shift is enabled (checkbox), always shift the window to include newest data
+                            // This overrides any prior user zoom so the automatic behavior is reliable.
+                            try
                             {
                                 var shift = 0.05 * prevWidth;
                                 double chosenMax = dataMax + shift;
@@ -940,14 +1015,15 @@ namespace TradeMVVM.ReadHoldings
                                 {
                                     plt.Axes.SetLimitsX(chosenMin, chosenMax);
                                     PlotTotalValueHistory.Refresh();
-                                    System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
-                                    // if user had zoomed, treat this as the new stored user limits so reapply keeps it
-                                    try { if (_plotUserZoomed) { _userXMin = chosenMin; _userXMax = chosenMax; } } catch { }
+                                    System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied (forced) chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
+                                    // clear user-zoom flag so future renders allow autoscale/shift
+                                    try { _plotUserZoomed = false; _userXMin = null; _userXMax = null; } catch { }
                                 }
-                                catch { }
+                                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic auto-shift failed: " + ex.Message); }
                             }
+                            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic reapply error: " + ex.Message); }
                         }
-                        catch { }
+                        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic reapply outer error: " + ex.Message); }
                     }
                     catch { }
                 };
@@ -1299,24 +1375,67 @@ namespace TradeMVVM.ReadHoldings
             double currentXMin = double.NaN, currentXMax = double.NaN;
             try
             {
-                if (_plotUserZoomed && _userXMin.HasValue && _userXMax.HasValue)
+                bool autoShiftEnabled = false;
+                try { autoShiftEnabled = ((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true; } catch { }
+
+                // If auto-shift is enabled, ignore any user zoom and compute range based on forced interval or data
+                if (autoShiftEnabled)
                 {
-                    currentXMin = _userXMin.Value;
-                    currentXMax = _userXMax.Value;
-                }
-                else if (_forcedIntervalUserSet && _forcedInterval.HasValue)
-                {
-                    double dataMax = xs.Length > 0 ? xs.Last() : DateTime.Now.ToOADate();
-                    var spanDays = _forcedInterval.Value.TotalDays;
-                    currentXMax = dataMax + 0.05 * spanDays;
-                    currentXMin = currentXMax - spanDays;
+                    try { _plotUserZoomed = false; } catch { }
+                    if (_forcedIntervalUserSet && _forcedInterval.HasValue)
+                    {
+                        double dataMax = xs.Length > 0 ? xs.Last() : DateTime.Now.ToOADate();
+                        var spanDays = _forcedInterval.Value.TotalDays;
+                        currentXMax = dataMax + 0.05 * spanDays;
+                        currentXMin = currentXMax - spanDays;
+                    }
+                    else
+                    {
+                        if (xs.Length > 0)
+                        {
+                            // keep same window width as current plot if possible
+                            try
+                            {
+                                var pltMin = PlotTotalValueHistory.Plot.Axes.Bottom.Min;
+                                var pltMax = PlotTotalValueHistory.Plot.Axes.Bottom.Max;
+                                if (!double.IsNaN(pltMin) && !double.IsNaN(pltMax) && pltMax > pltMin)
+                                {
+                                    var width = pltMax - pltMin;
+                                    var dataMax = xs.Max();
+                                    currentXMax = dataMax + 0.05 * width; // shift slightly right
+                                    currentXMin = currentXMax - width;
+                                }
+                                else
+                                {
+                                    currentXMin = xs.Min();
+                                    currentXMax = xs.Max();
+                                }
+                            }
+                            catch { currentXMin = xs.Min(); currentXMax = xs.Max(); }
+                        }
+                    }
                 }
                 else
                 {
-                    if (xs.Length > 0)
+                    if (_plotUserZoomed && _userXMin.HasValue && _userXMax.HasValue)
                     {
-                        currentXMin = xs.Min();
-                        currentXMax = xs.Max();
+                        currentXMin = _userXMin.Value;
+                        currentXMax = _userXMax.Value;
+                    }
+                    else if (_forcedIntervalUserSet && _forcedInterval.HasValue)
+                    {
+                        double dataMax = xs.Length > 0 ? xs.Last() : DateTime.Now.ToOADate();
+                        var spanDays = _forcedInterval.Value.TotalDays;
+                        currentXMax = dataMax + 0.05 * spanDays;
+                        currentXMin = currentXMax - spanDays;
+                    }
+                    else
+                    {
+                        if (xs.Length > 0)
+                        {
+                            currentXMin = xs.Min();
+                            currentXMax = xs.Max();
+                        }
                     }
                 }
             }
