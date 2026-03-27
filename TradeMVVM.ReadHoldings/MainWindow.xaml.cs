@@ -73,6 +73,9 @@ namespace TradeMVVM.ReadHoldings
         private readonly int _udpPort = 54123;
         // reference to checkbox in XAML to enable/disable automatic X-axis shifting
         private bool _autoShiftEnabled = false;
+        // when user forces an X interval via checkbox, store computed OADate limits here
+        private double? _forcedXMin = null;
+        private double? _forcedXMax = null;
         // current search filter text (null = no filter)
         private string? _currentSearch = null;
 
@@ -90,6 +93,8 @@ namespace TradeMVVM.ReadHoldings
                     try { if (TxtPath != null) TxtPath.Text = active; } catch { }
             }
             catch { }
+
+
 
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
             // apply any restored zoom (RestoreLayout may have set _zoom before Initialize completed)
@@ -378,6 +383,20 @@ namespace TradeMVVM.ReadHoldings
                 var ts = GetTimeSpanForCheckbox(cb.Name);
                 _forcedInterval = ts;
                 _forcedIntervalUserSet = true;
+                // compute and cache forced X limits based on NOW and chosen delta
+                try
+                {
+                    if (ts.HasValue)
+                    {
+                        var spanDays = ts.Value.TotalDays;
+                        var now = DateTime.Now.ToOADate();
+                        var fxMax = now + 0.05 * spanDays;
+                        var fxMin = fxMax - spanDays;
+                        if (fxMin >= fxMax) fxMin = fxMax - Math.Max(1.0 / 24.0, spanDays);
+                        _forcedXMin = fxMin; _forcedXMax = fxMax;
+                    }
+                }
+                catch { _forcedXMin = null; _forcedXMax = null; }
                 try { System.Diagnostics.Debug.WriteLine($"TVH: Interval checkbox checked {cb.Name}, timespan={ts}"); } catch { }
                 try
                 {
@@ -391,7 +410,7 @@ namespace TradeMVVM.ReadHoldings
                 try { SuppressAutoApplyFor(1200); } catch { }
                 try { ApplyXAxisInterval(ts); } catch { }
                 // Refresh data/plot to pick up any new data
-                try { LoadAndRenderTotalValueHistory(); } catch { }
+                try { LoadAndRenderTotalValueHistory(); } catch { } // No operation to trigger patch semantics
                 // Schedule re-apply in case data is not yet available; this will re-run ApplyXAxisInterval when data appears
                 try { ScheduleApplyInterval(ts); } catch { }
             }
@@ -423,6 +442,7 @@ namespace TradeMVVM.ReadHoldings
                             {
                                 _forcedInterval = null;
                                 _forcedIntervalUserSet = false;
+                                _forcedXMin = null; _forcedXMax = null;
                                 try { SuppressAutoApplyFor(800); } catch { }
                                 try { System.Diagnostics.Debug.WriteLine("TVH: Interval checkbox unchecked, clearing forced interval"); } catch { }
                                 try
@@ -551,24 +571,15 @@ namespace TradeMVVM.ReadHoldings
                             {
                                 try
                                 {
-                                    // determine dataMax fallback to now when no data present yet
-                                    double dataMax;
-                                    double dataMin;
-                                    if (_totalValueTimes != null && _totalValueTimes.Count > 0)
-                                    {
-                                        dataMax = _totalValueTimes.Last().ToOADate();
-                                        dataMin = _totalValueTimes.First().ToOADate();
-                                    }
-                                    else
-                                    {
-                                        dataMax = DateTime.Now.ToOADate();
-                                        dataMin = DateTime.FromOADate(dataMax).AddDays(-1).ToOADate();
-                                    }
                                     var spanDays = interval.Value.TotalDays;
-                                    var chosenMax = dataMax + 0.05 * spanDays;
+                                    // follow user rule: xmax = now + 5%*delta, xmin = xmax - delta
+                                    var nowOa = DateTime.Now.ToOADate();
+                                    var chosenMax = nowOa + 0.05 * spanDays;
+                                    // clamp defensively to now
+                                    chosenMax = Math.Min(chosenMax, DateTime.Now.ToOADate());
                                     var chosenMin = chosenMax - spanDays;
-                                    if (chosenMin < dataMin) { chosenMin = dataMin; chosenMax = chosenMin + spanDays; }
-                                    plt.Axes.SetLimitsX(chosenMin, chosenMax);
+                                    if (chosenMin >= chosenMax) chosenMin = chosenMax - Math.Max(1.0 / 24.0, spanDays);
+                                    ApplyXAxisLimitsToAll(chosenMin, chosenMax);
                                     try { _userXMin = chosenMin; _userXMax = chosenMax; _plotUserZoomed = true; } catch { }
                                     try { System.Diagnostics.Debug.WriteLine($"TVH: Forced SetLimitsX applied (user): chosenMin={DateTime.FromOADate(chosenMin):o}..chosenMax={DateTime.FromOADate(chosenMax):o}"); } catch { }
                                 }
@@ -577,16 +588,14 @@ namespace TradeMVVM.ReadHoldings
                             else if (interval.HasValue && _totalValueTimes != null && _totalValueTimes.Count > 0)
                             {
                                 var dataMax = _totalValueTimes.Last().ToOADate();
-                                var dataMin = _totalValueTimes.First().ToOADate();
-                                try { System.Diagnostics.Debug.WriteLine($"TVH: totalValueTimes.Count={_totalValueTimes.Count}, dataMin={DateTime.FromOADate(dataMin):o}, dataMax={DateTime.FromOADate(dataMax):o}"); } catch { }
+                                // follow user's rule: compute forced window strictly from NOW
+                                try { System.Diagnostics.Debug.WriteLine($"TVH: totalValueTimes.Count={_totalValueTimes.Count}, dataMax={DateTime.FromOADate(dataMax):o}"); } catch { }
                                 var spanDays = interval.Value.TotalDays;
-                                var chosenMax = dataMax + 0.05 * spanDays; // place last point ~5% from right edge
+                                var nowOa = DateTime.Now.ToOADate();
+                                // xmax = now + 5% of delta, xmin = xmax - delta (allow slight future to position data at ~95%)
+                                var chosenMax = nowOa + 0.05 * spanDays;
                                 var chosenMin = chosenMax - spanDays;
-                                if (chosenMin < dataMin)
-                                {
-                                    chosenMin = dataMin;
-                                    chosenMax = chosenMin + spanDays;
-                                }
+                                if (chosenMin >= chosenMax) chosenMin = chosenMax - Math.Max(1.0 / 24.0, spanDays);
 
                                 // respect the "rightmost 5%" rule: only shift if previous view had newest data within rightmost 5% or no valid prev limits
                                 try
@@ -609,11 +618,10 @@ namespace TradeMVVM.ReadHoldings
                                     {
                                         try
                                         {
-                                            plt.Axes.SetLimitsX(chosenMin, chosenMax);
+                                            ApplyXAxisLimitsToAll(chosenMin, chosenMax);
                                             // remember these as user limits so subsequent plot renders do not overwrite them
                                             try { _userXMin = chosenMin; _userXMax = chosenMax; _plotUserZoomed = true; } catch { }
                                             try { System.Diagnostics.Debug.WriteLine($"TVH: SetLimitsX applied: chosenMin={DateTime.FromOADate(chosenMin):o}..chosenMax={DateTime.FromOADate(chosenMax):o}"); } catch { }
-                                            try { System.Diagnostics.Debug.WriteLine($"TVH: after set prevAxisMin={plt.Axes.Bottom.Min}, prevAxisMax={plt.Axes.Bottom.Max}"); } catch { }
                                         }
                                         catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: SetLimitsX failed: " + ex.Message); }
                                     }
@@ -641,6 +649,68 @@ namespace TradeMVVM.ReadHoldings
         }
 
         // Mouse wheel zoom handler for the ScottPlot WpfPlot control
+        // Apply X axis limits (OADate) to all known ScottPlot WpfPlot controls in this window
+        private void ApplyXAxisLimitsToAll(double min, double max)
+        {
+            try
+            {
+                try { System.Diagnostics.Debug.WriteLine($"ApplyXAxisLimitsToAll called: min={DateTime.FromOADate(min):o} max={DateTime.FromOADate(max):o} forced={_forcedIntervalUserSet}"); } catch { }
+                try { System.Diagnostics.Debug.WriteLine(Environment.StackTrace); } catch { }
+
+                // If the user selected a forced interval, override caller-provided min/max
+                try
+                {
+                    if (_forcedIntervalUserSet)
+                    {
+                        double spanDays = 0.0;
+                        try { spanDays = _forcedInterval?.TotalDays ?? ((_forcedXMax.HasValue && _forcedXMin.HasValue) ? (_forcedXMax.Value - _forcedXMin.Value) : 0.0); } catch { spanDays = 0.0; }
+                        if (spanDays <= 0) spanDays = _forcedInterval?.TotalDays ?? 0.0;
+                        if (spanDays > 0)
+                        {
+                            var nowOa = DateTime.Now.ToOADate();
+                            // allow fxMax = now + 5%*span so last point sits around 95% from left
+                            var fxMax = nowOa + 0.05 * spanDays;
+                            var fxMin = fxMax - spanDays;
+                            if (fxMin >= fxMax) fxMin = fxMax - Math.Max(1.0 / 24.0, spanDays);
+                            min = fxMin; max = fxMax;
+                            try { _forcedXMin = fxMin; _forcedXMax = fxMax; } catch { }
+                        }
+                        else
+                        {
+                            // fallback to any cached forced values if present
+                            if (_forcedXMin.HasValue && _forcedXMax.HasValue)
+                            {
+                                min = _forcedXMin.Value; max = Math.Min(_forcedXMax.Value, DateTime.Now.ToOADate());
+                            }
+                        }
+                    }
+                }
+                catch { }
+                var names = new[] {
+                    "PlotTotalValueHistory", "Tops", "Flops", "Knockouts", "ETF",
+                    "Plot", "PlotTops", "PlotBottoms", "PlotAll"
+                };
+
+                foreach (var name in names)
+                {
+                    try
+                    {
+                        var wp = this.FindName(name) as ScottPlot.WPF.WpfPlot;
+                        if (wp == null) continue;
+                        try
+                        {
+                            var plt = wp.Plot;
+                            if (plt == null) continue;
+                            plt.Axes.SetLimitsX(min, max);
+                            try { wp.Refresh(); } catch { }
+                        }
+                        catch { }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
         private void PlotTotalValueHistory_PreviewMouseWheel(object? sender, MouseWheelEventArgs e)
         {
             try
@@ -1033,30 +1103,34 @@ namespace TradeMVVM.ReadHoldings
 
                             // When automatic shift is enabled (checkbox), always shift the window to include newest data
                             // This overrides any prior user zoom so the automatic behavior is reliable.
-                            try
-                            {
-                                var shift = 0.05 * prevWidth;
-                                double chosenMax = dataMax + shift;
-                                double chosenMin = chosenMax - prevWidth;
-
-                                // ensure not before earliest data
-                                double dataMin = _totalValueTimes.First().ToOADate();
-                                if (chosenMin < dataMin)
-                                {
-                                    chosenMin = dataMin;
-                                    chosenMax = chosenMin + prevWidth;
-                                }
-
                                 try
                                 {
-                                    plt.Axes.SetLimitsX(chosenMin, chosenMax);
-                                    PlotTotalValueHistory.Refresh();
-                                    System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied (forced) chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
-                                    // clear user-zoom flag so future renders allow autoscale/shift
-                                    try { _plotUserZoomed = false; _userXMin = null; _userXMax = null; } catch { }
+                                    var shift = 0.05 * prevWidth;
+                                    double chosenMax = dataMax + shift;
+                                    // never allow axis max in the future
+                                    chosenMax = Math.Min(chosenMax, DateTime.Now.ToOADate());
+                                    double chosenMin = chosenMax - prevWidth;
+
+                                    // ensure not before earliest data
+                                    double dataMin = _totalValueTimes.First().ToOADate();
+                                    if (chosenMin < dataMin)
+                                    {
+                                        chosenMin = dataMin;
+                                        chosenMax = Math.Min(chosenMin + prevWidth, DateTime.Now.ToOADate());
+                                    }
+
+                                    if (chosenMin >= chosenMax) chosenMin = chosenMax - Math.Max(1.0 / 24.0, prevWidth);
+
+                                    try
+                                    {
+                                        ApplyXAxisLimitsToAll(chosenMin, chosenMax);
+                                        PlotTotalValueHistory.Refresh();
+                                        System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied (forced) chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
+                                        // clear user-zoom flag so future renders allow autoscale/shift
+                                        try { _plotUserZoomed = false; _userXMin = null; _userXMax = null; } catch { }
+                                    }
+                                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic auto-shift failed: " + ex.Message); }
                                 }
-                                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic auto-shift failed: " + ex.Message); }
-                            }
                             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic reapply error: " + ex.Message); }
                         }
                         catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic reapply outer error: " + ex.Message); }
@@ -1599,9 +1673,12 @@ namespace TradeMVVM.ReadHoldings
             catch { }
 
             // add series (only 'today' series is displayed to avoid showing overall series)
-            var scToday = plt.Add.Scatter(xs, ysToday);
+            // scale Y to k€ for display to keep axis in thousands
+            var ysScaled = ysToday?.Select(v => v / 1000.0).ToArray() ?? Array.Empty<double>();
+            var scToday = plt.Add.Scatter(xs, ysScaled);
 
             try { plt.Axes.DateTimeTicksBottom(); } catch { }
+            try { plt.Axes.Left.Label.Text = string.Empty; } catch { }
 
             // Determine X range to consider for Y autoscale
             double currentXMin = double.NaN, currentXMax = double.NaN;
@@ -1617,9 +1694,9 @@ namespace TradeMVVM.ReadHoldings
                     try { _plotUserZoomed = false; } catch { }
                     if (_forcedIntervalUserSet && _forcedInterval.HasValue)
                     {
-                        double dataMax = xs.Length > 0 ? xs.Last() : DateTime.Now.ToOADate();
+                        // follow user request: base on now, not dataMax
                         var spanDays = _forcedInterval.Value.TotalDays;
-                        currentXMax = dataMax + 0.05 * spanDays;
+                        currentXMax = DateTime.Now.ToOADate() + 0.05 * spanDays;
                         currentXMin = currentXMax - spanDays;
                     }
                     else
@@ -1657,10 +1734,12 @@ namespace TradeMVVM.ReadHoldings
                     }
                     else if (_forcedIntervalUserSet && _forcedInterval.HasValue)
                     {
-                        double dataMax = xs.Length > 0 ? xs.Last() : DateTime.Now.ToOADate();
+                        // Always base forced interval on NOW (user requirement): xmax = now + 5%*delta, xmin = xmax - delta
                         var spanDays = _forcedInterval.Value.TotalDays;
-                        currentXMax = dataMax + 0.05 * spanDays;
+                        currentXMax = DateTime.Now.ToOADate() + 0.05 * spanDays;
                         currentXMin = currentXMax - spanDays;
+                        // cache enforced limits so later renders can reuse same values
+                        try { _forcedXMin = currentXMin; _forcedXMax = currentXMax; } catch { }
                     }
                     else
                     {
@@ -1686,6 +1765,72 @@ namespace TradeMVVM.ReadHoldings
                     currentXMin = DateTime.Now.AddDays(-1).ToOADate(); currentXMax = DateTime.Now.ToOADate();
                 }
             }
+
+            // If user selected a forced interval via checkbox, always compute X limits based on NOW
+            try
+            {
+                if (_forcedIntervalUserSet && _forcedInterval.HasValue)
+                {
+                    var spanDays = _forcedInterval.Value.TotalDays;
+                    var nowOa = DateTime.Now.ToOADate();
+                    var forcedMax = nowOa + 0.05 * spanDays; // now + 5% of delta
+                    var forcedMin = forcedMax - spanDays;
+                    if (forcedMin >= forcedMax) forcedMin = forcedMax - Math.Max(1.0 / 24.0, spanDays);
+                    currentXMin = forcedMin;
+                    currentXMax = forcedMax;
+                }
+            }
+            catch { }
+                // Enforce the computed X limits on the main plot so it behaves the same as the copied plots
+                try
+                {
+                    // apply DateTime tick generator with consistent formatting
+                    try
+                    {
+                        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic()
+                        {
+                            LabelFormatter = (DateTime date) => { try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); } }
+                        };
+                    }
+                    catch { }
+
+                    // set Y axis label to none (values scaled)
+                    try { plt.Axes.Left.Label.Text = string.Empty; } catch { }
+
+                    // If user forced interval, always enforce cached forced limits and refuse autoscale
+                    if (_forcedIntervalUserSet && _forcedXMin.HasValue && _forcedXMax.HasValue)
+                    {
+                        try
+                        {
+                            var fxMin = _forcedXMin.Value;
+                            var fxMax = _forcedXMax.Value;
+                            // ensure fxMax is never in the future (defensive)
+                            // recompute from now in case time advanced since cache
+                            try { var span = _forcedInterval?.TotalDays ?? (fxMax - fxMin); fxMax = Math.Min(DateTime.Now.ToOADate() + 0.05 * span, DateTime.Now.ToOADate()); fxMin = fxMax - span; } catch { fxMax = Math.Min(fxMax, DateTime.Now.ToOADate()); }
+                            if (fxMin >= fxMax) fxMin = fxMax - Math.Max(1.0 / 24.0, (_forcedInterval?.TotalDays ?? (1.0 / 24.0)));
+                            currentXMin = fxMin; currentXMax = fxMax;
+                            plt.Axes.SetLimitsX(fxMin, fxMax);
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        // enforce a sensible minimum X span when too few points exist to avoid axis jumping
+                        double minSpanDays = 1.0 / 24.0; // at least 1 hour
+                        double span = Math.Max(currentXMax - currentXMin, minSpanDays);
+                        // center on current center (or last data point if degenerate)
+                        double center = (currentXMin + currentXMax) / 2.0;
+                        if (double.IsNaN(center) || double.IsInfinity(center))
+                        {
+                            if (xs.Length > 0) center = xs.Last(); else center = DateTime.Now.ToOADate();
+                        }
+                        double chosenMin = center - span / 2.0;
+                        double chosenMax = center + span / 2.0;
+                        try { plt.Axes.SetLimitsX(chosenMin, chosenMax); currentXMin = chosenMin; currentXMax = chosenMax; } catch { }
+                    }
+                }
+                catch { }
+
 
             // Compute Y min/max only for points inside current X range
             double minY = double.PositiveInfinity, maxY = double.NegativeInfinity;
@@ -1752,7 +1897,14 @@ namespace TradeMVVM.ReadHoldings
                         pad = Math.Max(pad, baseVal * 0.05);
                     }
 
-                    try { plt.Axes.SetLimitsY(minY - pad, maxY + pad); } catch { }
+                    try
+                    {
+                        // data plotted on this plot is scaled to k€ (values/1000), so apply scaled Y limits
+                        var scaledMin = (minY - pad) / 1000.0;
+                        var scaledMax = (maxY + pad) / 1000.0;
+                        plt.Axes.SetLimitsY(scaledMin, scaledMax);
+                    }
+                    catch { }
                 }
             }
             catch { }
@@ -1762,9 +1914,9 @@ namespace TradeMVVM.ReadHoldings
             // Also render copies into the right-area plots (duplicate rendering)
             try
             {
-                // prepare arrays for duplicate plots
+                // prepare arrays for duplicate plots (Y scaled to k€)
                 var xsDup = xs;
-                var ysDup = ysToday;
+                var ysDup = ysScaled;
 
                 // compute final Y limits used for main plot (if set)
                 double? finalYMin = null, finalYMax = null;
@@ -1787,8 +1939,32 @@ namespace TradeMVVM.ReadHoldings
                             double baseVal = Math.Max(Math.Abs(maxY), 1.0);
                             pad = Math.Max(pad, baseVal * 0.05);
                         }
-                        finalYMin = minY - pad;
-                        finalYMax = maxY + pad;
+                        // finalYMin/Max are used for duplicate plots which receive Y values scaled to k€
+                        finalYMin = (minY - pad) / 1000.0;
+                        finalYMax = (maxY + pad) / 1000.0;
+                    }
+                }
+                catch { }
+                // final enforcement: ensure all plots use the same X limits computed above
+                try
+                {
+                    // If user forced an interval, prefer the cached forced limits (computed from NOW + 5% delta)
+                    if (_forcedIntervalUserSet && _forcedXMin.HasValue && _forcedXMax.HasValue)
+                    {
+                        try
+                        {
+                            var fxMin = _forcedXMin.Value;
+                            var fxMax = Math.Min(_forcedXMax.Value, DateTime.Now.ToOADate());
+                            if (fxMax > fxMin) ApplyXAxisLimitsToAll(fxMin, fxMax);
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        if (!double.IsNaN(currentXMin) && !double.IsNaN(currentXMax) && currentXMax > currentXMin)
+                        {
+                            ApplyXAxisLimitsToAll(currentXMin, currentXMax);
+                        }
                     }
                 }
                 catch { }
@@ -1868,6 +2044,7 @@ namespace TradeMVVM.ReadHoldings
                        
                             try { pltTop.Axes.DateTimeTicksBottom(); } catch { }
                             try { pltTop.Legend.IsVisible = true; } catch { }
+                            try { pltTop.Axes.SetLimitsX(currentXMin, currentXMax); } catch { }
                             pt.Refresh();
 
                             // Also populate left-area 3 with a tidy list of top increases
@@ -1992,6 +2169,7 @@ namespace TradeMVVM.ReadHoldings
 
                             try { pltTop.Axes.DateTimeTicksBottom(); } catch { }
                             try { pltTop.Legend.IsVisible = true; } catch { }
+                            try { pltTop.Axes.SetLimitsX(currentXMin, currentXMax); } catch { }
                             pt.Refresh();
 
                             // Also populate left-area 3 with a tidy list of top increases
@@ -2151,6 +2329,7 @@ namespace TradeMVVM.ReadHoldings
                                 }
 
                                 try { pltTarget.Axes.DateTimeTicksBottom(); } catch { }
+                                try { pltTarget.Axes.SetLimitsX(currentXMin, currentXMax); } catch { }
 
                                 // compute Y limits with padding
                                 double yMinC = double.NaN, yMaxC = double.NaN;

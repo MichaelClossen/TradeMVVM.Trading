@@ -259,17 +259,17 @@
         <Grid  Grid.Column="4" >
             <Grid.RowDefinitions>
                 <RowDefinition Height="70" />
-                <RowDefinition Height="8" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="8" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="8" />
+                <RowDefinition Height="1" />
+                <RowDefinition Height="1.2*" />
+                <RowDefinition Height="1" />
                 <RowDefinition Height="0.5*" />
-                <RowDefinition Height="8" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="8" />
+                <RowDefinition Height="40" />
+                <RowDefinition Height="0.7*" />
+                <RowDefinition Height="1" />
+                <RowDefinition Height="1.2*" />
+                <RowDefinition Height="1" />
                 <RowDefinition Height="0.5*" />
-                <RowDefinition Height="8" />
+                <!--<RowDefinition Height="8" />-->
             </Grid.RowDefinitions>
             <Border Grid.Column="0" Grid.Row="0" Background="White" Padding="6">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -289,19 +289,23 @@
                     <!--<TextBlock HorizontalAlignment="Center" Foreground="#FF666666" FontSize="11" Text="(Keine Auswahl = Standardverhalten)" />-->
                 </StackPanel>
             </Border>
-            <Border Grid.Column="0" Grid.Row="2">
-                <!-- Time series plot of Gesamtwert for the active CSV portfolio -->
-                <ScottPlot:WpfPlot x:Name="PlotTotalValueHistory" Margin="6" />
-            </Border>
-            <Border Grid.Column="0" Grid.Row="4" Padding="6">
+          
+            <Border Grid.Column="0" Grid.Row="2" Padding="6">
                 <!-- Plot for Tops -->
                 <ScottPlot:WpfPlot x:Name="Tops" Margin="6"/>
             </Border>
-            <Border Grid.Column="0" Grid.Row="6" Padding="6">
+            <Border Grid.Column="0" Grid.Row="4" Padding="6">
                 <StackPanel>
-                    <TextBlock Text="Top Gewinner" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                    <TextBlock Text="Top Gewinner" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,0" />
                     <ListBox x:Name="LstLeftArea3" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch" />
                 </StackPanel>
+            </Border>
+            <Border Grid.Column="0" Grid.Row="5" Padding="6">
+                <TextBlock Text="Gesamtwert Today" FontWeight="Bold" Foreground="#FF333333" FontSize="16" HorizontalAlignment="Center" />
+            </Border>
+            <Border Grid.Column="0" Grid.Row="6">
+                <!-- Time series plot of Gesamtwert for the active CSV portfolio -->
+                <ScottPlot:WpfPlot x:Name="PlotTotalValueHistory" Margin="6" />
             </Border>
             <Border Grid.Column="0" Grid.Row="8" Padding="6">
                 <!-- Plot for Bottoms -->
