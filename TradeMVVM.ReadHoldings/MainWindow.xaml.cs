@@ -1383,7 +1383,8 @@ namespace TradeMVVM.ReadHoldings
         }
 
         // Load NEW_Prices grouped by ISIN. Returns dictionary ISIN -> list of (time, change) sorted by time.
-        private Dictionary<string, List<(DateTime time, double change)>> LoadNewPricesByIsin()
+        // If an optional set of ISINs is provided, only rows for these ISINs are loaded (reduces DB work and memory).
+        private Dictionary<string, List<(DateTime time, double change)>> LoadNewChangesByIsin(IEnumerable<string>? filterIsins = null)
         {
             var dict = new Dictionary<string, List<(DateTime, double)>>(StringComparer.OrdinalIgnoreCase);
             try
@@ -1393,7 +1394,28 @@ namespace TradeMVVM.ReadHoldings
                 conn.Open();
 
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT Isin, Datum, Change FROM NEW_Prices ORDER BY Isin, Datum;";
+
+                if (filterIsins != null)
+                {
+                    var list = filterIsins.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    if (list.Count == 0)
+                        return dict;
+
+                    // build parameterized IN clause
+                    var placeholders = new List<string>();
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var pn = "$p" + i;
+                        placeholders.Add(pn);
+                        cmd.Parameters.AddWithValue(pn, list[i]);
+                    }
+                    var inClause = string.Join(",", placeholders);
+                    cmd.CommandText = $"SELECT Isin, Datum, Change FROM NEW_Prices WHERE Isin IN ({inClause}) ORDER BY Isin, Datum;";
+                }
+                else
+                {
+                    cmd.CommandText = "SELECT Isin, Datum, Change FROM NEW_Prices ORDER BY Isin, Datum;";
+                }
 
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
@@ -1450,6 +1472,80 @@ namespace TradeMVVM.ReadHoldings
             }
             catch { }
             return dict;
+        }
+
+        // Load mapping of ISIN -> display name from available tables (NEW_Holdings, Holdings, NEW_Prices)
+        private Dictionary<string, string> LoadIsinNames()
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var cs = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+                using var conn = new SqliteConnection(cs);
+                conn.Open();
+
+                // candidate tables to look for Isin/Name
+                var candidates = new[] { "NEW_Holdings", "Holdings", "NEW_Prices" };
+
+                foreach (var table in candidates)
+                {
+                    try
+                    {
+                        // check columns
+                        var cols = new List<string>();
+                        using (var pragma = conn.CreateCommand())
+                        {
+                            pragma.CommandText = $"PRAGMA table_info({table});";
+                            using var r = pragma.ExecuteReader();
+                            while (r.Read())
+                            {
+                                try { cols.Add(r.GetString(1)); } catch { }
+                            }
+                        }
+
+                        if (cols.Count == 0) continue;
+
+                        bool hasIsin = cols.Any(c => string.Equals(c, "Isin", StringComparison.OrdinalIgnoreCase) || string.Equals(c, "ISIN", StringComparison.OrdinalIgnoreCase));
+                        bool hasName = cols.Any(c => string.Equals(c, "Name", StringComparison.OrdinalIgnoreCase) || string.Equals(c, "Bezeichnung", StringComparison.OrdinalIgnoreCase) || string.Equals(c, "LongName", StringComparison.OrdinalIgnoreCase));
+
+                        if (!hasIsin) continue;
+
+                        // build query depending on availability of Name
+                        string qry;
+                        if (hasName) qry = $"SELECT DISTINCT Isin, Name FROM {table} WHERE Isin IS NOT NULL;";
+                        else qry = $"SELECT DISTINCT Isin FROM {table} WHERE Isin IS NOT NULL;";
+
+                        using var cmd = conn.CreateCommand();
+                        cmd.CommandText = qry;
+                        using var rdr = cmd.ExecuteReader();
+                        while (rdr.Read())
+                        {
+                            try
+                            {
+                                var isinObj = rdr.GetValue(0);
+                                if (isinObj == null || isinObj == DBNull.Value) continue;
+                                var isin = isinObj.ToString()?.Trim();
+                                if (string.IsNullOrWhiteSpace(isin)) continue;
+
+                                string name = string.Empty;
+                                if (hasName && rdr.FieldCount > 1)
+                                {
+                                    try { var nobj = rdr.GetValue(1); name = nobj == null || nobj == DBNull.Value ? string.Empty : nobj.ToString()?.Trim() ?? string.Empty; } catch { name = string.Empty; }
+                                }
+
+                                if (!result.ContainsKey(isin)) result[isin] = name;
+                            }
+                            catch { }
+                        }
+
+                        // if we found any, stop searching further tables
+                        if (result.Count > 0) break;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result;
         }
 
       
@@ -1706,17 +1802,40 @@ namespace TradeMVVM.ReadHoldings
                 catch { }
                 try
                 {
-                    var pa = this.FindName("PlotAll") as ScottPlot.WPF.WpfPlot;
+                    var pt = this.FindName("Plot") as ScottPlot.WPF.WpfPlot;
+                    if (pt != null) RenderCopyPlot(pt, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                }
+                catch { }
+
+                //--------------------------------------------
+
+                try
+                {
+                    var pa = this.FindName("Knockouts") as ScottPlot.WPF.WpfPlot;
                     if (pa != null)
                     {
+                        pa.Plot.Title("Knockouts");
+                        pa.Refresh();
                         // Instead of duplicating TotalValues here, load data from NEW_Prices and render
                         try
                         {
-                            var changePoints = LoadNewPricesPoints();
+                            //var pricePoints = LoadNewPricesPoints();
                       
+                            //TODO
+                            // prepare list of ISINs and their display names (if available) before loading changes
+                            var isinNames = LoadIsinNames();
+                            var isinNameList = isinNames.Select(kv => (Isin: kv.Key, Name: kv.Value)).ToList();
 
-                            // load per-ISIN series and render each as its own line
-                            var changeSeries = LoadNewPricesByIsin();
+                            // filter list to entries whose Name contains "Long" or "Short" (case-insensitive)
+                            var filteredIsinNameList = isinNameList
+                                .Where(x => !string.IsNullOrWhiteSpace(x.Name) && (
+                                    x.Name.IndexOf("Long", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    x.Name.IndexOf("Short", StringComparison.OrdinalIgnoreCase) >= 0))
+                                .ToList();
+
+                            // load per-ISIN series and render each as its own line (only for filtered ISINs)
+                            var filterIsins = filteredIsinNameList.Select(x => x.Isin).ToList();
+                            var changeSeries = LoadNewChangesByIsin(filterIsins);
                             if (changeSeries != null && changeSeries.Count > 0)
                             {
                                 var pltTarget = pa.Plot;
@@ -1796,7 +1915,112 @@ namespace TradeMVVM.ReadHoldings
                 try
                 {
                     var pb = this.FindName("PlotBottoms") as ScottPlot.WPF.WpfPlot;
-                    if (pb != null) RenderCopyPlot(pb, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                    if (pb != null) RenderCopyPlot(pb, xsDup, ysDup, "Flops", currentXMin, currentXMax, finalYMin, finalYMax);
+                }
+                catch { }
+
+                //---------------------------
+
+                try
+                {
+                    var pa = this.FindName("ETF") as ScottPlot.WPF.WpfPlot;
+                    if (pa != null)
+                    {
+                        pa.Plot.Title("ETFs");
+                        pa.Refresh();
+                        // Instead of duplicating TotalValues here, load data from NEW_Prices and render
+                        try
+                        {
+                            var isinNames = LoadIsinNames();
+                            var isinNameList = isinNames.Select(kv => (Isin: kv.Key, Name: kv.Value)).ToList();
+
+                            // filter list to entries whose Name contains "Long" or "Short" (case-insensitive)
+                            var filteredIsinNameList = isinNameList
+                                .Where(x => !string.IsNullOrWhiteSpace(x.Name) && (
+                                    x.Name.IndexOf("Long", StringComparison.OrdinalIgnoreCase) < 0 &&
+                                    x.Name.IndexOf("Short", StringComparison.OrdinalIgnoreCase) < 0))
+                                .ToList();
+
+                            // load per-ISIN series and render each as its own line (only for filtered ISINs)
+                            var filterIsins = filteredIsinNameList.Select(x => x.Isin).ToList();
+                            var changeSeries = LoadNewChangesByIsin(filterIsins);
+
+                            // load per-ISIN series and render each as its own line
+                            //var changeSeries = LoadNewChangesByIsin();
+                            if (changeSeries != null && changeSeries.Count > 0)
+                            {
+                                var pltTarget = pa.Plot;
+                                pltTarget.Clear();
+
+                                double globalMin = double.PositiveInfinity, globalMax = double.NegativeInfinity;
+
+                                foreach (var kv in changeSeries.OrderBy(k => k.Key))
+                                {
+                                    try
+                                    {
+                                        var isin = kv.Key;
+                                        var list = kv.Value;
+                                        if (list == null || list.Count == 0) continue;
+
+                                        var xsSeries = list.Select(p => p.Item1.ToOADate()).ToArray();
+                                        var ysSeries = list.Select(p => p.Item2).ToArray();
+
+                                        // add series
+                                        var pl = pltTarget.Add.Scatter(xsSeries, ysSeries);
+                                        try
+                                        {
+                                            var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
+                                            if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, isin);
+                                        }
+                                        catch { }
+
+                                        // update global min/max
+                                        for (int i = 0; i < ysSeries.Length; i++)
+                                        {
+                                            var v = ysSeries[i];
+                                            if (!double.IsNaN(v) && !double.IsInfinity(v))
+                                            {
+                                                globalMin = Math.Min(globalMin, v);
+                                                globalMax = Math.Max(globalMax, v);
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                try { pltTarget.Axes.DateTimeTicksBottom(); } catch { }
+
+                                // compute Y limits with padding
+                                double yMinC = double.NaN, yMaxC = double.NaN;
+                                if (!double.IsInfinity(globalMin) && !double.IsInfinity(globalMax))
+                                {
+                                    var range = Math.Max(1e-9, globalMax - globalMin);
+                                    var pad = Math.Max(0.5, range * 0.1);
+                                    yMinC = globalMin - pad;
+                                    yMaxC = globalMax + pad;
+                                }
+                                else
+                                {
+                                    yMinC = (double?)finalYMin ?? -1.0;
+                                    yMaxC = (double?)finalYMax ?? 1.0;
+                                }
+
+                                // apply X/Y limits
+                                try { if (!double.IsNaN(currentXMin) && !double.IsNaN(currentXMax)) pltTarget.Axes.SetLimitsX(currentXMin, currentXMax); } catch { }
+                                try { pltTarget.Axes.SetLimitsY(yMinC, yMaxC); } catch { }
+
+                                // do not show legend for Change plot (keep UI compact)
+                                try { pltTarget.Legend.IsVisible = false; } catch { }
+
+                                pa.Refresh();
+                            }
+                        }
+                        catch
+                        {
+                            // on any error, fallback to original behavior
+                            RenderCopyPlot(pa, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                        }
+                    }
                 }
                 catch { }
             }

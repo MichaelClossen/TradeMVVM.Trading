@@ -12,19 +12,17 @@
         <Grid.ColumnDefinitions>
 
             <!-- Links -->
-            <ColumnDefinition x:Name="ColLeft"
-                      Width="Auto"
-                      MinWidth="300"
-                              MaxWidth="1010"/>
-
+            <ColumnDefinition x:Name="ColLeft" Width="Auto" MinWidth="300" MaxWidth="867"/>
             <ColumnDefinition Width="8"/>
 
             <!-- Mitte -->
             <ColumnDefinition x:Name="ColRight" MinWidth="180" MaxWidth="180"/>
-
             <ColumnDefinition Width="8"/>
 
-            <ColumnDefinition x:Name="ColMostRight" MinWidth="200" Width="*"/>
+            <ColumnDefinition x:Name="ColMostRight" MinWidth="200" Width="450"/>
+            <ColumnDefinition Width="8"/>
+
+            <ColumnDefinition x:Name="ColMostRight2" MinWidth="200" Width="*"/>
 
         </Grid.ColumnDefinitions>
         <!-- Left: controls above holdings table -->
@@ -291,18 +289,43 @@
                 <!-- Time series plot of Gesamtwert for the active CSV portfolio -->
                 <ScottPlot:WpfPlot x:Name="PlotTotalValueHistory" Margin="6" />
             </Border>
-            <Border Grid.Column="0" Grid.Row="4" Background="AliceBlue" Padding="6">
+            <Border Grid.Column="0" Grid.Row="4" Padding="6">
                 <!-- Plot for Tops -->
-                <ScottPlot:WpfPlot x:Name="PlotTops" Margin="6" />
+                <ScottPlot:WpfPlot x:Name="PlotTops" Margin="6"/>
             </Border>
-            <Border Grid.Column="0" Grid.Row="6" Background="AliceBlue" Padding="6">
+            <Border Grid.Column="0" Grid.Row="6" Padding="6">
                 <!-- Plot for All -->
-                <ScottPlot:WpfPlot x:Name="PlotAll" Margin="6" />
+                <ScottPlot:WpfPlot x:Name="Plot" Margin="6"/>
             </Border>
-            <Border Grid.Column="0" Grid.Row="8" Padding="6" Background="AliceBlue">
+            <Border Grid.Column="0" Grid.Row="8" Padding="6">
                 <!-- Plot for Bottoms -->
                 <ScottPlot:WpfPlot x:Name="PlotBottoms" Margin="6" />
             </Border>
         </Grid>
+
+        <Grid  Grid.Column="6" >
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="8" />
+                <RowDefinition Height="*" />
+
+            </Grid.RowDefinitions>
+            <Border Grid.Column="0" Grid.Row="0" Background="White" Padding="6">
+
+            </Border>
+
+            <Border Grid.Column="0" Grid.Row="0" Padding="6">
+                <!-- Plot for All -->
+                <ScottPlot:WpfPlot x:Name="Knockouts" Margin="6"/>
+            </Border>
+
+            <Border Grid.Column="0" Grid.Row="2" Padding="6">
+                <!-- Plot for Tops -->
+                <ScottPlot:WpfPlot x:Name="ETF" Margin="6"/>
+            </Border>
+        </Grid>
+
+
+
     </Grid>
 </Window>
