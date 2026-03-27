@@ -6,7 +6,8 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:TradeMVVM.ReadHoldings"
         mc:Ignorable="d"
-        Title="MainWindow" Height="1200" Width="2500"   MinWidth="520">
+        Title="MHC-Development Portfolio" Height="1200" Width="2500"   MinWidth="520"
+        Icon="favicon.ico">
 
     <Grid>
         <Grid.ColumnDefinitions>
@@ -353,5 +354,12 @@
             </Border>
         </Grid>
 
+
+    <!-- Overlay canvas for small-plot hover tooltip (always on top) -->
+    <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False" Grid.Column="0" Grid.ColumnSpan="8" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+        <Border x:Name="SmallHoverOverlay" Visibility="Collapsed" Background="#FFFFF8CC" BorderBrush="#FFAAAA00" BorderThickness="1" CornerRadius="4" Padding="6" Opacity="0.95" Panel.ZIndex="999">
+            <TextBlock x:Name="SmallHoverOverlayText" Foreground="Black" FontSize="12" />
+        </Border>
+    </Canvas>
     </Grid>
 </Window>

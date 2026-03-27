@@ -1,19 +1,14 @@
 ﻿using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using ScottPlot;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
-using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -78,10 +73,30 @@ namespace TradeMVVM.ReadHoldings
         private double? _forcedXMax = null;
         // current search filter text (null = no filter)
         private string? _currentSearch = null;
+        // small hover tooltip for auxiliary plots
+        private System.Windows.Controls.ToolTip? _smallHoverTooltip;
+        // fallback popup if ToolTip does not appear reliably
+        private System.Windows.Controls.Primitives.Popup? _smallHoverPopup;
+        private System.Windows.Controls.TextBlock? _smallHoverPopupText;
+        // topmost fallback window (guaranteed visible)
+        private System.Windows.Window? _smallHoverWindow;
+        private System.Windows.Controls.TextBlock? _smallHoverWindowText;
+        // DEBUG: force using topmost hover window to bypass WPF overlay/z-order issues
+        // default false so only the in-window overlay is used
+        private bool _forceTopmostHoverTest = false;
+        // show only the in-window overlay at mouse; suppress ToolTip/Popup/Window
+        private bool _onlyShowOverlay = true;
+        // mapping from plottable object to user-friendly name (ISIN full name)
+        private System.Collections.Generic.Dictionary<object, string> _plottableNames = new System.Collections.Generic.Dictionary<object, string>();
+        private readonly object _plottableNamesLock = new object();
+        // store series points by display name (stable lookup for hover name)
+        private System.Collections.Generic.Dictionary<string, (double[] Xs, double[] Ys)> _seriesPointsByName = new System.Collections.Generic.Dictionary<string, (double[] Xs, double[] Ys)>();
+        private readonly object _seriesPointsByNameLock = new object();
 
         public MainWindow()
         {
             InitializeComponent();
+            try { System.Diagnostics.Trace.WriteLine("MainWindow ctor: InitializeComponent completed"); } catch { }
             // ensure CSV active table exists as early as possible
             try { EnsureCsvActiveTableExists(_dbPath); } catch { }
 
@@ -93,8 +108,6 @@ namespace TradeMVVM.ReadHoldings
                     try { if (TxtPath != null) TxtPath.Text = active; } catch { }
             }
             catch { }
-
-
 
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
             // apply any restored zoom (RestoreLayout may have set _zoom before Initialize completed)
@@ -114,6 +127,41 @@ namespace TradeMVVM.ReadHoldings
             // MouseWheel handler will be hooked after constructor ends (method defined below)
             try { PlotTotalValueHistory.MouseLeftButtonUp += PlotTotalValueHistory_MouseLeftButtonUp; } catch { }
             try { PlotTotalValueHistory.PreviewMouseDown += PlotTotalValueHistory_PreviewMouseDown; } catch { }
+            // small hover tooltip for auxiliary plots (Tops, Flops, ETF, Knockouts)
+            try
+            {
+                // place tooltip at mouse position for better visual alignment
+                _smallHoverTooltip = new System.Windows.Controls.ToolTip { StaysOpen = true, Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse };
+                var wp1 = this.FindName("Tops") as ScottPlot.WPF.WpfPlot;
+                if (wp1 != null)
+                {
+                    wp1.MouseMove += SmallPlot_MouseMove; wp1.MouseLeave += SmallPlot_MouseLeave;
+                    try { System.Diagnostics.Trace.WriteLine("Attached SmallPlot handlers to Tops"); } catch { }
+                }
+                else try { System.Diagnostics.Trace.WriteLine("Tops control not found (FindName returned null)"); } catch { }
+                var wp2 = this.FindName("Flops") as ScottPlot.WPF.WpfPlot;
+                if (wp2 != null)
+                {
+                    wp2.MouseMove += SmallPlot_MouseMove; wp2.MouseLeave += SmallPlot_MouseLeave;
+                    try { System.Diagnostics.Trace.WriteLine("Attached SmallPlot handlers to Flops"); } catch { }
+                }
+                else try { System.Diagnostics.Trace.WriteLine("Flops control not found (FindName returned null)"); } catch { }
+                var wp3 = this.FindName("ETF") as ScottPlot.WPF.WpfPlot;
+                if (wp3 != null)
+                {
+                    wp3.MouseMove += SmallPlot_MouseMove; wp3.MouseLeave += SmallPlot_MouseLeave;
+                    try { System.Diagnostics.Trace.WriteLine("Attached SmallPlot handlers to ETF"); } catch { }
+                }
+                else try { System.Diagnostics.Trace.WriteLine("ETF control not found (FindName returned null)"); } catch { }
+                var wp4 = this.FindName("Knockouts") as ScottPlot.WPF.WpfPlot;
+                if (wp4 != null)
+                {
+                    wp4.MouseMove += SmallPlot_MouseMove; wp4.MouseLeave += SmallPlot_MouseLeave;
+                    try { System.Diagnostics.Trace.WriteLine("Attached SmallPlot handlers to Knockouts"); } catch { }
+                }
+                else try { System.Diagnostics.Trace.WriteLine("Knockouts control not found (FindName returned null)"); } catch { }
+            }
+            catch (Exception ex) { try { System.Diagnostics.Trace.WriteLine("SmallPlot attach failed: " + ex.Message); } catch { } }
             try { PlotTotalValueHistory.PreviewMouseUp += PlotTotalValueHistory_PreviewMouseUp; } catch { }
             // wire up interval checkbox events after InitializeComponent to ensure FindName works
             try
@@ -165,6 +213,30 @@ namespace TradeMVVM.ReadHoldings
 
             // ensure columns are sized to content on first load
             try { this.Loaded += MainWindow_Loaded; } catch { }
+            try
+            {
+                // debug: make overlay visible to confirm overlay rendering
+                this.Loaded += (s, e) =>
+                {
+                    try { System.Diagnostics.Trace.WriteLine("MainWindow Loaded handler invoked"); } catch { }
+                    try
+                    {
+                        var ov = this.FindName("SmallHoverOverlay") as System.Windows.Controls.Border;
+                        var txt = this.FindName("SmallHoverOverlayText") as System.Windows.Controls.TextBlock;
+                        if (ov != null)
+                        {
+                            try { System.Diagnostics.Trace.WriteLine("SmallHoverOverlay found in Loaded handler"); } catch { }
+                            // Do not show test overlay on startup; keep it collapsed
+                            ov.Visibility = Visibility.Collapsed;
+                            try { if (txt != null) txt.Text = string.Empty; } catch { }
+                            try { System.Windows.Controls.Canvas.SetLeft(ov, 8); System.Windows.Controls.Canvas.SetTop(ov, 8); } catch { }
+                            try { System.Diagnostics.Trace.WriteLine($"SmallHoverOverlay initialized (collapsed) at left=8 top=8"); } catch { }
+                        }
+                    }
+                    catch { }
+                };
+            }
+            catch { }
             // wire up search textbox if present
             try
             {
@@ -207,6 +279,42 @@ namespace TradeMVVM.ReadHoldings
             {
                 Debug.WriteLine(ex);
             }
+        }
+
+        // Helpers for SmallPlot hover: extract arrays or nearest point (fallback)
+        private bool TryGetPlottableArrays(object plottable, out double[] xs, out double[] ys)
+        {
+            xs = Array.Empty<double>(); ys = Array.Empty<double>();
+            try
+            {
+                var t = plottable.GetType();
+                var propXs = t.GetProperty("Xs", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                var propYs = t.GetProperty("Ys", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                System.Reflection.FieldInfo? fieldXs = null;
+                System.Reflection.FieldInfo? fieldYs = null;
+                if (propXs == null) fieldXs = t.GetField("Xs", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+                if (propYs == null) fieldYs = t.GetField("Ys", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+
+                if (propXs != null) xs = propXs.GetValue(plottable) as double[] ?? Array.Empty<double>();
+                else if (fieldXs != null) xs = fieldXs.GetValue(plottable) as double[] ?? Array.Empty<double>();
+                if (propYs != null) ys = propYs.GetValue(plottable) as double[] ?? Array.Empty<double>();
+                else if (fieldYs != null) ys = fieldYs.GetValue(plottable) as double[] ?? Array.Empty<double>();
+
+                return xs.Length > 0 && ys.Length > 0;
+            }
+            catch { xs = Array.Empty<double>(); ys = Array.Empty<double>(); return false; }
+        }
+
+        // Best-effort: if plottable exposes a nearest-point API, use it. Otherwise return false.
+        private bool TryGetNearestPointFromPlottable(object plottable, double mouseX, out double x, out double y)
+        {
+            x = double.NaN; y = double.NaN;
+            try
+            {
+                // Many plottables do not expose a nearest-point method; keep this conservative.
+                return false;
+            }
+            catch { return false; }
         }
 
         // Search/filter the holdings shown in the DataGrid
@@ -921,6 +1029,490 @@ namespace TradeMVVM.ReadHoldings
             catch { }
         }
 
+        // small plot hover handlers for Tops/Flops/ETF/Knockouts
+        private void SmallPlot_MouseLeave(object? sender, System.Windows.Input.MouseEventArgs e)
+        {
+            try
+            {
+                try { System.Diagnostics.Trace.WriteLine("SmallPlot_MouseLeave invoked"); } catch { }
+                if (_smallHoverTooltip != null) _smallHoverTooltip.IsOpen = false;
+                try { if (_smallHoverPopup != null) _smallHoverPopup.IsOpen = false; } catch { }
+                try
+                {
+                    var ov = this.FindName("SmallHoverOverlay") as System.Windows.Controls.Border;
+                    if (ov != null)
+                    {
+                        ov.Visibility = System.Windows.Visibility.Collapsed;
+                        try { System.Diagnostics.Trace.WriteLine("SmallHoverOverlay collapsed in MouseLeave"); } catch { }
+                    }
+                    else
+                    {
+                        try { System.Diagnostics.Trace.WriteLine("SmallHoverOverlay not found in MouseLeave"); } catch { }
+                    }
+                }
+                catch (Exception ex) { try { System.Diagnostics.Trace.WriteLine("SmallPlot_MouseLeave exception: " + ex.Message); } catch { } }
+                try { if (_smallHoverWindow != null && _smallHoverWindow.IsVisible) _smallHoverWindow.Hide(); } catch { }
+            }
+            catch { }
+        }
+
+        private void SmallPlot_MouseMove(object? sender, System.Windows.Input.MouseEventArgs e)
+        {
+            try
+            {
+                try { System.Diagnostics.Trace.WriteLine("SmallPlot_MouseMove invoked"); } catch { }
+                try
+                {
+                    var main = System.Windows.Application.Current?.MainWindow;
+                    System.Diagnostics.Trace.WriteLine($"MainWindow ref present={main != null}");
+                    var ovCheck = this.FindName("SmallHoverOverlay") as System.Windows.FrameworkElement;
+                    if (ovCheck == null)
+                        System.Diagnostics.Trace.WriteLine("SmallHoverOverlay not found via FindName at MouseMove");
+                    else
+                        System.Diagnostics.Trace.WriteLine($"SmallHoverOverlay vis={ovCheck.Visibility} actualSize={ovCheck.ActualWidth:0.##}x{ovCheck.ActualHeight:0.##}");
+                }
+                catch { }
+                if (sender == null || e == null) return;
+                var plot = sender as ScottPlot.WPF.WpfPlot;
+                if (plot == null) return;
+
+                var pos = e.GetPosition(plot);
+                try { System.Diagnostics.Trace.WriteLine($"SmallPlot_MouseMove: mousePos={pos.X:0.##},{pos.Y:0.##}"); } catch { }
+
+                // try to get precise data coordinates; if unavailable, approximate X from plottable data range and pixel position
+                double mouseX = double.NaN, mouseY = double.NaN;
+                bool haveCoords = TryGetMouseCoordinates(plot, pos, out mouseX, out mouseY);
+                if (!haveCoords)
+                {
+                    try
+                    {
+                        // build global X range from available plottables' X arrays
+                        double globalMin = double.PositiveInfinity; double globalMax = double.NegativeInfinity;
+                        var pList = plot.Plot.GetPlottables();
+                        foreach (var p in pList)
+                        {
+                            try
+                            {
+                                var t = p.GetType();
+                                var propXs = t.GetProperty("Xs");
+                                System.Reflection.FieldInfo? fieldXs = null;
+                                if (propXs == null) fieldXs = t.GetField("Xs");
+                                double[]? xs = null;
+                                if (propXs != null) xs = propXs.GetValue(p) as double[];
+                                else if (fieldXs != null) xs = fieldXs.GetValue(p) as double[];
+                                if (xs == null || xs.Length == 0) continue;
+                                double localMin = xs.Min(); double localMax = xs.Max();
+                                if (localMin < globalMin) globalMin = localMin;
+                                if (localMax > globalMax) globalMax = localMax;
+                            }
+                            catch { }
+                        }
+
+                        try { System.Diagnostics.Trace.WriteLine($"SmallPlot_MouseMove: globalMin={globalMin} globalMax={globalMax} plotWidth={plot.ActualWidth}"); } catch { }
+                        if (double.IsInfinity(globalMin) || double.IsInfinity(globalMax) || plot.ActualWidth <= 0)
+                        {
+                            // cannot compute approximate coordinate
+                            return;
+                        }
+
+                        double frac = Math.Max(0.0, Math.Min(1.0, pos.X / plot.ActualWidth));
+                        mouseX = globalMin + frac * (globalMax - globalMin);
+                        // set mouseY to NaN (not used for nearest-X matching)
+                        mouseY = double.NaN;
+                    }
+                    catch { return; }
+                }
+                try { System.Diagnostics.Trace.WriteLine($"SmallPlot_MouseMove: haveCoords={haveCoords} dataX={mouseX} dataY={mouseY}"); } catch { }
+
+                double bestDist = double.MaxValue; // no-op patch to ensure context
+                double bestX = double.NaN, bestY = double.NaN;
+                object? bestPlottable = null;
+                //double bestDist = double.MaxValue; // no-op patch to ensure variables exist
+                //double bestX = double.NaN, bestY = double.NaN;
+                //object? bestPlottable = null;
+                // inspect plottables reflectively for Xs/Ys arrays
+                var plottables = plot.Plot.GetPlottables();
+                try
+                {
+                    // Log plottable types for diagnostics (limit to first 10)
+                    if (plottables != null)
+                    {
+                        int idx = 0;
+                        foreach (var pp in plottables)
+                        {
+                            if (idx++ > 9) break;
+                            try
+                            {
+                                var tn = pp.GetType().FullName;
+                                var t = pp.GetType();
+                                var hasXs = t.GetProperty("Xs") != null || t.GetField("Xs") != null;
+                                var hasYs = t.GetProperty("Ys") != null || t.GetField("Ys") != null;
+                                int len = -1;
+                                try
+                                {
+                                    var propXs = t.GetProperty("Xs");
+                                    var fieldXs = propXs == null ? t.GetField("Xs") : null;
+                                    double[]? xs = null;
+                                    if (propXs != null) xs = propXs.GetValue(pp) as double[];
+                                    else if (fieldXs != null) xs = fieldXs.GetValue(pp) as double[];
+                                    if (xs != null) len = xs.Length;
+                                }
+                                catch { }
+                                System.Diagnostics.Trace.WriteLine($"SmallPlot: plottable type={tn} hasXs={hasXs} hasYs={hasYs} firstXsLen={len}");
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+                foreach (var p in plottables)
+                {
+                    try
+                    {
+                        // Try to get nearest point using plottable-specific helpers (if available)
+                        if (TryGetNearestPointFromPlottable(p, mouseX, out var px, out var py))
+                        {
+                            var dx = Math.Abs(px - mouseX);
+                            if (dx < bestDist)
+                            {
+                                bestDist = dx;
+                                bestX = px;
+                                bestY = py;
+                                bestPlottable = p;
+                            }
+                            continue;
+                        }
+
+                        // fallback: attempt to read Xs/Ys arrays from public or non-public members
+                        if (TryGetPlottableArrays(p, out var xs, out var ys))
+                        {
+                            int len = Math.Min(xs.Length, ys.Length);
+                            for (int i = 0; i < len; i++)
+                            {
+                                try
+                                {
+                                    var dx = Math.Abs(xs[i] - mouseX);
+                                    if (dx < bestDist)
+                                    {
+                                        bestDist = dx;
+                                        bestX = xs[i];
+                                        bestY = ys[i];
+                                        bestPlottable = p;
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                // Additional fallback: search nearest point by series name -> points mapping
+                string? nearestSeriesName = null;
+                try
+                {
+                    lock (_seriesPointsByNameLock)
+                    {
+                        if (_seriesPointsByName != null && _seriesPointsByName.Count > 0)
+                        {
+                            foreach (var kv in _seriesPointsByName)
+                            {
+                                try
+                                {
+                                    var pXs = kv.Value.Xs;
+                                    var pYs = kv.Value.Ys;
+                                    if (pXs == null || pYs == null) continue;
+                                    int len = Math.Min(pXs.Length, pYs.Length);
+                                    for (int i = 0; i < len; i++)
+                                    {
+                                        try
+                                        {
+                                            var dx = Math.Abs(pXs[i] - mouseX);
+                                            if (dx < bestDist)
+                                            {
+                                                bestDist = dx;
+                                                bestX = pXs[i];
+                                                bestY = pYs[i];
+                                                nearestSeriesName = kv.Key;
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // If we couldn't find a nearest plottable point, fall back to using the data coordinates
+                bool foundNearest = !(double.IsInfinity(bestDist) || double.IsNaN(bestX) || double.IsNaN(bestY) || bestDist == double.MaxValue);
+
+                string content;
+                if (foundNearest)
+                {
+                    try
+                    {
+                        // assume X is OADate (datetime)
+                        var dt = DateTime.FromOADate(bestX);
+                        content = $"{dt:yyyy-MM-dd HH:mm}\n{bestY:0.##}";
+                    }
+                    catch
+                    {
+                        content = string.Format(System.Globalization.CultureInfo.InvariantCulture, "x={0:0.##}\n y={1:0.##}", bestX, bestY);
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        // use mouse data coordinates if available
+                        if (!double.IsNaN(mouseX))
+                        {
+                            try
+                            {
+                                var dt = DateTime.FromOADate(mouseX);
+                                if (!double.IsNaN(mouseY)) content = $"{dt:yyyy-MM-dd HH:mm}\n{mouseY:0.##}";
+                                else content = $"{dt:yyyy-MM-dd HH:mm}";
+                            }
+                            catch
+                            {
+                                if (!double.IsNaN(mouseY)) content = string.Format(System.Globalization.CultureInfo.InvariantCulture, "x={0:0.##}\n y={1:0.##}", mouseX, mouseY);
+                                else content = string.Format(System.Globalization.CultureInfo.InvariantCulture, "x={0:0.##}", mouseX);
+                            }
+                        }
+                        else
+                        {
+                            content = "(no data)";
+                        }
+                        try { System.Diagnostics.Trace.WriteLine("SmallPlot: fallback content used (mouse coords)"); } catch { }
+                    }
+                    catch { content = "(no data)"; }
+                }
+
+                try
+                {
+                    System.Diagnostics.Trace.WriteLine($"SmallPlot: plottables={plottables?.Count() ?? 0} bestDist={bestDist} bestX={bestX} bestY={bestY}");
+                    // log first plottable X length if available
+                    var first = plottables?.FirstOrDefault();
+                    if (first != null)
+                    {
+                        try
+                        {
+                            var t = first.GetType();
+                            var propXs = t.GetProperty("Xs");
+                            System.Reflection.FieldInfo? fieldXs = null;
+                            if (propXs == null) fieldXs = t.GetField("Xs");
+                            double[]? xs = null;
+                            if (propXs != null) xs = propXs.GetValue(first) as double[];
+                            else if (fieldXs != null) xs = fieldXs.GetValue(first) as double[];
+                            if (xs != null) System.Diagnostics.Trace.WriteLine($"SmallPlot: first plottable Xs length={xs.Length}");
+                        }
+                        catch { }
+                    }
+                }
+                catch (Exception) { }
+
+                // Close any previous external hover UI to ensure only the in-window overlay is visible
+                try { if (_smallHoverTooltip != null) _smallHoverTooltip.IsOpen = false; } catch { }
+                try { if (_smallHoverPopup != null) _smallHoverPopup.IsOpen = false; } catch { }
+                try { if (_smallHoverWindow != null && _smallHoverWindow.IsVisible) _smallHoverWindow.Hide(); } catch { }
+
+                // Only use the in-window overlay at mouse; suppress ToolTip/Popup/Window when _onlyShowOverlay == true
+                // Position and show overlay
+                try
+                {
+                    // convert plot local pos to screen and then to window coordinates
+                    var screenPt = plot.PointToScreen(pos);
+                    var winPt = this.PointFromScreen(new System.Windows.Point(screenPt.X, screenPt.Y));
+                    var overlay = this.FindName("SmallHoverOverlay") as System.Windows.Controls.Border;
+                    var overlayText = this.FindName("SmallHoverOverlayText") as System.Windows.Controls.TextBlock;
+                    var canvas = this.FindName("OverlayCanvas") as System.Windows.Controls.Canvas;
+                    if (overlay != null && overlayText != null && canvas != null)
+                    {
+                        // include holding name if available
+                        string displayContent = content;
+                        try
+                        {
+                            string? name = null;
+                            // prefer the plottable we detected as nearest
+                            if (bestPlottable != null)
+                            {
+                                try
+                                {
+                                    var t = bestPlottable.GetType();
+                                    var propLabel = t.GetProperty("Label");
+                                    if (propLabel != null) name = propLabel.GetValue(bestPlottable) as string;
+                                    if (string.IsNullOrWhiteSpace(name))
+                                    {
+                                        var fieldLabel = t.GetField("label", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+                                        if (fieldLabel != null) name = fieldLabel.GetValue(bestPlottable) as string;
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            // fallback: try match by Xs/Ys arrays and SeriesPoints mapping if available
+                            if (string.IsNullOrWhiteSpace(name))
+                            {
+                                try
+                                {
+                                    // inspect ChartManager/SeriesByKey if available on plot.Tag
+                                    var tag = plot.Tag;
+                                    if (tag != null)
+                                    {
+                                        try
+                                        {
+                                            var tm = tag.GetType();
+                                            var propSeriesByKey = tm.GetProperty("SeriesByKey");
+                                            var propSeriesPoints = tm.GetProperty("SeriesPoints");
+                                            if (propSeriesByKey != null && propSeriesPoints != null)
+                                            {
+                                                var sbk = propSeriesByKey.GetValue(tag) as System.Collections.IDictionary;
+                                                var sp = propSeriesPoints.GetValue(tag) as System.Collections.IDictionary;
+                                                if (sbk != null && sp != null)
+                                                {
+                                                    // iterate series points to find one containing bestX
+                                                    foreach (System.Collections.DictionaryEntry de in sp)
+                                                    {
+                                                        try
+                                                        {
+                                                            var arr = de.Value as System.ValueTuple<double[], double?>?; // not used
+                                                        }
+                                                        catch { }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            // prefer mapping from plottable -> name if available
+                            try
+                            {
+                                if (bestPlottable != null)
+                                {
+                                    try
+                                    {
+                                        int mapCount = 0;
+                                        bool containsKey = false;
+                                        lock (_plottableNamesLock)
+                                        {
+                                            if (_plottableNames != null)
+                                            {
+                                                mapCount = _plottableNames.Count;
+                                                containsKey = _plottableNames.ContainsKey(bestPlottable);
+                                            }
+                                        }
+                                        try { System.Diagnostics.Trace.WriteLine($"SmallPlot: bestPlottable type={bestPlottable.GetType().FullName} mapCount={mapCount} containsKey={containsKey}"); } catch { }
+
+                                        lock (_plottableNamesLock)
+                                        {
+                                            if (_plottableNames != null && _plottableNames.TryGetValue(bestPlottable, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
+                                            {
+                                                name = mapped;
+                                                try { System.Diagnostics.Trace.WriteLine($"SmallPlot: name found in mapping='{name}'"); } catch { }
+                                            }
+                                            else
+                                            {
+                                                // fallback: try to match by comparing Xs arrays between plottables
+                                                try
+                                                {
+                                                    int found = 0;
+                                                    foreach (var kv in _plottableNames)
+                                                    {
+                                                        try
+                                                        {
+                                                            var cand = kv.Key;
+                                                            // get Xs from candidate and bestPlottable
+                                                            double[]? xsCand = null;
+                                                            double[]? xsBest = null;
+                                                            try
+                                                            {
+                                                                var tc = cand.GetType();
+                                                                var pc = tc.GetProperty("Xs");
+                                                                var fc = pc == null ? tc.GetField("Xs") : null;
+                                                                if (pc != null) xsCand = pc.GetValue(cand) as double[];
+                                                                else if (fc != null) xsCand = fc.GetValue(cand) as double[];
+                                                            }
+                                                            catch { }
+                                                            try
+                                                            {
+                                                                var tb = bestPlottable.GetType();
+                                                                var pb = tb.GetProperty("Xs");
+                                                                var fb = pb == null ? tb.GetField("Xs") : null;
+                                                                if (pb != null) xsBest = pb.GetValue(bestPlottable) as double[];
+                                                                else if (fb != null) xsBest = fb.GetValue(bestPlottable) as double[];
+                                                            }
+                                                            catch { }
+
+                                                            if (xsCand != null && xsBest != null && xsCand.Length == xsBest.Length)
+                                                            {
+                                                                bool match = true;
+                                                                for (int i = 0; i < xsCand.Length; i++)
+                                                                {
+                                                                    // compare with small tolerance
+                                                                    if (Math.Abs(xsCand[i] - xsBest[i]) > 1e-9) { match = false; break; }
+                                                                }
+                                                                if (match)
+                                                                {
+                                                                    name = kv.Value;
+                                                                    found++;
+                                                                    try { System.Diagnostics.Trace.WriteLine($"SmallPlot: fallback matched candidate name='{name}'"); } catch { }
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        catch { }
+                                                    }
+                                                    try { System.Diagnostics.Trace.WriteLine($"SmallPlot: plottable name fallback match found={(name != null)}"); } catch { }
+                                                }
+                                                catch { }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                            catch { }
+
+                            if (string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(nearestSeriesName))
+                                name = nearestSeriesName;
+
+                            if (!string.IsNullOrWhiteSpace(name)) displayContent = name + "\n" + content.Replace("\n", "\r\n");
+                        }
+                        catch { }
+                        overlayText.Text = displayContent;
+                        // ensure overlay is measured so DesiredSize is available
+                        overlay.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+                        double left = winPt.X + 12;
+                        double top = winPt.Y + 12;
+                        double maxLeft = Math.Max(0, this.ActualWidth - overlay.DesiredSize.Width - 8);
+                        double maxTop = Math.Max(0, this.ActualHeight - overlay.DesiredSize.Height - 8);
+                        if (left > maxLeft) left = maxLeft;
+                        if (top > maxTop) top = maxTop;
+                        System.Windows.Controls.Canvas.SetLeft(overlay, left);
+                        System.Windows.Controls.Canvas.SetTop(overlay, top);
+                        try { System.Windows.Controls.Panel.SetZIndex(overlay, 10000); } catch { }
+                        overlay.Visibility = System.Windows.Visibility.Visible;
+                        try { System.Diagnostics.Trace.WriteLine($"SmallPlot: overlay made Visible at left={left:0.##} top={top:0.##} desired={overlay.DesiredSize.Width:0.##}x{overlay.DesiredSize.Height:0.##}"); } catch { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    try { System.Diagnostics.Trace.WriteLine("SmallPlot overlay failed: " + ex.Message); } catch { }
+                }
+
+                // Disabled: do not show separate topmost hover window (only in-window overlay should remain)
+                try { if (_smallHoverWindow != null && _smallHoverWindow.IsVisible) _smallHoverWindow.Hide(); } catch { }
+            }
+            catch { }
+        }
+
         // Handle shift-doubleclick on plot: delete corresponding row from NEW_TotalValues
         private void PlotTotalValueHistory_MouseDoubleClick(object? sender, MouseButtonEventArgs e)
         {
@@ -1103,34 +1695,34 @@ namespace TradeMVVM.ReadHoldings
 
                             // When automatic shift is enabled (checkbox), always shift the window to include newest data
                             // This overrides any prior user zoom so the automatic behavior is reliable.
+                            try
+                            {
+                                var shift = 0.05 * prevWidth;
+                                double chosenMax = dataMax + shift;
+                                // never allow axis max in the future
+                                chosenMax = Math.Min(chosenMax, DateTime.Now.ToOADate());
+                                double chosenMin = chosenMax - prevWidth;
+
+                                // ensure not before earliest data
+                                double dataMin = _totalValueTimes.First().ToOADate();
+                                if (chosenMin < dataMin)
+                                {
+                                    chosenMin = dataMin;
+                                    chosenMax = Math.Min(chosenMin + prevWidth, DateTime.Now.ToOADate());
+                                }
+
+                                if (chosenMin >= chosenMax) chosenMin = chosenMax - Math.Max(1.0 / 24.0, prevWidth);
+
                                 try
                                 {
-                                    var shift = 0.05 * prevWidth;
-                                    double chosenMax = dataMax + shift;
-                                    // never allow axis max in the future
-                                    chosenMax = Math.Min(chosenMax, DateTime.Now.ToOADate());
-                                    double chosenMin = chosenMax - prevWidth;
-
-                                    // ensure not before earliest data
-                                    double dataMin = _totalValueTimes.First().ToOADate();
-                                    if (chosenMin < dataMin)
-                                    {
-                                        chosenMin = dataMin;
-                                        chosenMax = Math.Min(chosenMin + prevWidth, DateTime.Now.ToOADate());
-                                    }
-
-                                    if (chosenMin >= chosenMax) chosenMin = chosenMax - Math.Max(1.0 / 24.0, prevWidth);
-
-                                    try
-                                    {
-                                        ApplyXAxisLimitsToAll(chosenMin, chosenMax);
-                                        PlotTotalValueHistory.Refresh();
-                                        System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied (forced) chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
-                                        // clear user-zoom flag so future renders allow autoscale/shift
-                                        try { _plotUserZoomed = false; _userXMin = null; _userXMax = null; } catch { }
-                                    }
-                                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic auto-shift failed: " + ex.Message); }
+                                    ApplyXAxisLimitsToAll(chosenMin, chosenMax);
+                                    PlotTotalValueHistory.Refresh();
+                                    System.Diagnostics.Debug.WriteLine($"TVH: periodic auto-shift applied (forced) chosenMin={chosenMin} chosenMax={chosenMax} actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}");
+                                    // clear user-zoom flag so future renders allow autoscale/shift
+                                    try { _plotUserZoomed = false; _userXMin = null; _userXMax = null; } catch { }
                                 }
+                                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic auto-shift failed: " + ex.Message); }
+                            }
                             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic reapply error: " + ex.Message); }
                         }
                         catch (Exception ex) { System.Diagnostics.Debug.WriteLine("TVH: periodic reapply outer error: " + ex.Message); }
@@ -1622,7 +2214,7 @@ namespace TradeMVVM.ReadHoldings
             return result;
         }
 
-      
+
         private static double ToMedian(IEnumerable<double> values)
         {
             try
@@ -1781,55 +2373,55 @@ namespace TradeMVVM.ReadHoldings
                 }
             }
             catch { }
-                // Enforce the computed X limits on the main plot so it behaves the same as the copied plots
+            // Enforce the computed X limits on the main plot so it behaves the same as the copied plots
+            try
+            {
+                // apply DateTime tick generator with consistent formatting
                 try
                 {
-                    // apply DateTime tick generator with consistent formatting
-                    try
+                    plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic()
                     {
-                        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic()
-                        {
-                            LabelFormatter = (DateTime date) => { try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); } }
-                        };
-                    }
-                    catch { }
-
-                    // set Y axis label to none (values scaled)
-                    try { plt.Axes.Left.Label.Text = string.Empty; } catch { }
-
-                    // If user forced interval, always enforce cached forced limits and refuse autoscale
-                    if (_forcedIntervalUserSet && _forcedXMin.HasValue && _forcedXMax.HasValue)
-                    {
-                        try
-                        {
-                            var fxMin = _forcedXMin.Value;
-                            var fxMax = _forcedXMax.Value;
-                            // ensure fxMax is never in the future (defensive)
-                            // recompute from now in case time advanced since cache
-                            try { var span = _forcedInterval?.TotalDays ?? (fxMax - fxMin); fxMax = Math.Min(DateTime.Now.ToOADate() + 0.05 * span, DateTime.Now.ToOADate()); fxMin = fxMax - span; } catch { fxMax = Math.Min(fxMax, DateTime.Now.ToOADate()); }
-                            if (fxMin >= fxMax) fxMin = fxMax - Math.Max(1.0 / 24.0, (_forcedInterval?.TotalDays ?? (1.0 / 24.0)));
-                            currentXMin = fxMin; currentXMax = fxMax;
-                            plt.Axes.SetLimitsX(fxMin, fxMax);
-                        }
-                        catch { }
-                    }
-                    else
-                    {
-                        // enforce a sensible minimum X span when too few points exist to avoid axis jumping
-                        double minSpanDays = 1.0 / 24.0; // at least 1 hour
-                        double span = Math.Max(currentXMax - currentXMin, minSpanDays);
-                        // center on current center (or last data point if degenerate)
-                        double center = (currentXMin + currentXMax) / 2.0;
-                        if (double.IsNaN(center) || double.IsInfinity(center))
-                        {
-                            if (xs.Length > 0) center = xs.Last(); else center = DateTime.Now.ToOADate();
-                        }
-                        double chosenMin = center - span / 2.0;
-                        double chosenMax = center + span / 2.0;
-                        try { plt.Axes.SetLimitsX(chosenMin, chosenMax); currentXMin = chosenMin; currentXMax = chosenMax; } catch { }
-                    }
+                        LabelFormatter = (DateTime date) => { try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); } }
+                    };
                 }
                 catch { }
+
+                // set Y axis label to none (values scaled)
+                try { plt.Axes.Left.Label.Text = string.Empty; } catch { }
+
+                // If user forced interval, always enforce cached forced limits and refuse autoscale
+                if (_forcedIntervalUserSet && _forcedXMin.HasValue && _forcedXMax.HasValue)
+                {
+                    try
+                    {
+                        var fxMin = _forcedXMin.Value;
+                        var fxMax = _forcedXMax.Value;
+                        // ensure fxMax is never in the future (defensive)
+                        // recompute from now in case time advanced since cache
+                        try { var span = _forcedInterval?.TotalDays ?? (fxMax - fxMin); fxMax = Math.Min(DateTime.Now.ToOADate() + 0.05 * span, DateTime.Now.ToOADate()); fxMin = fxMax - span; } catch { fxMax = Math.Min(fxMax, DateTime.Now.ToOADate()); }
+                        if (fxMin >= fxMax) fxMin = fxMax - Math.Max(1.0 / 24.0, (_forcedInterval?.TotalDays ?? (1.0 / 24.0)));
+                        currentXMin = fxMin; currentXMax = fxMax;
+                        plt.Axes.SetLimitsX(fxMin, fxMax);
+                    }
+                    catch { }
+                }
+                else
+                {
+                    // enforce a sensible minimum X span when too few points exist to avoid axis jumping
+                    double minSpanDays = 1.0 / 24.0; // at least 1 hour
+                    double span = Math.Max(currentXMax - currentXMin, minSpanDays);
+                    // center on current center (or last data point if degenerate)
+                    double center = (currentXMin + currentXMax) / 2.0;
+                    if (double.IsNaN(center) || double.IsInfinity(center))
+                    {
+                        if (xs.Length > 0) center = xs.Last(); else center = DateTime.Now.ToOADate();
+                    }
+                    double chosenMin = center - span / 2.0;
+                    double chosenMax = center + span / 2.0;
+                    try { plt.Axes.SetLimitsX(chosenMin, chosenMax); currentXMin = chosenMin; currentXMax = chosenMax; } catch { }
+                }
+            }
+            catch { }
 
 
             // Compute Y min/max only for points inside current X range
@@ -2036,12 +2628,22 @@ namespace TradeMVVM.ReadHoldings
                                     var xsTop = item.Points.Select(p => p.t.ToOADate()).ToArray();
                                     var ysTop = item.Points.Select(p => p.v).ToArray();
                                     var s = pltTop.Add.Scatter(xsTop, ysTop);
-                                   
+                                    try
+                                    {
+                                        var labelText = !string.IsNullOrWhiteSpace(item.Name) ? item.Name : item.Isin;
+                                        lock (_seriesPointsByNameLock)
+                                        {
+                                            _seriesPointsByName[labelText] = (xsTop ?? Array.Empty<double>(), ysTop ?? Array.Empty<double>());
+                                        }
+                                        try { System.Diagnostics.Trace.WriteLine($"SmallPlot: mapped series name='{labelText}' points={xsTop?.Length ?? 0}"); } catch { }
+                                    }
+                                    catch { }
+
                                 }
                                 catch { }
                             }
 
-                       
+
                             try { pltTop.Axes.DateTimeTicksBottom(); } catch { }
                             try { pltTop.Legend.IsVisible = true; } catch { }
                             try { pltTop.Axes.SetLimitsX(currentXMin, currentXMax); } catch { }
@@ -2152,7 +2754,7 @@ namespace TradeMVVM.ReadHoldings
                             var topDec = perIsin.OrderBy(x => x.Delta).Take(4).ToList();
 
                             var pltTop = pt.Plot;
-                            pltTop.Clear();                          
+                            pltTop.Clear();
 
                             // plot top decreases (label prefixed with "-")
                             foreach (var item in topDec)
@@ -2162,7 +2764,16 @@ namespace TradeMVVM.ReadHoldings
                                     var xsTop = item.Points.Select(p => p.t.ToOADate()).ToArray();
                                     var ysTop = item.Points.Select(p => p.v).ToArray();
                                     var s = pltTop.Add.Scatter(xsTop, ysTop);
-                                   
+                                    try
+                                    {
+                                        var labelText = !string.IsNullOrWhiteSpace(item.Name) ? item.Name : item.Isin;
+                                        lock (_seriesPointsByNameLock)
+                                        {
+                                            _seriesPointsByName[labelText] = (xsTop ?? Array.Empty<double>(), ysTop ?? Array.Empty<double>());
+                                        }
+                                    }
+                                    catch { }
+
                                 }
                                 catch { }
                             }
@@ -2238,7 +2849,7 @@ namespace TradeMVVM.ReadHoldings
                         catch
                         {
                             // fallback to simple copy
-                            try { RenderCopyPlot(pt, xsDup, ysDup, "Flops", currentXMin, currentXMax, finalYMin, finalYMax); } catch { }                       
+                            try { RenderCopyPlot(pt, xsDup, ysDup, "Flops", currentXMin, currentXMax, finalYMin, finalYMax); } catch { }
                         }
                     }
 
@@ -2271,7 +2882,7 @@ namespace TradeMVVM.ReadHoldings
                         try
                         {
                             //var pricePoints = LoadNewPricesPoints();
-                      
+
                             //TODO
                             // prepare list of ISINs and their display names (if available) before loading changes
                             var isinNames = LoadIsinNames();
@@ -2364,7 +2975,7 @@ namespace TradeMVVM.ReadHoldings
                     }
                 }
                 catch { }
-              
+
 
                 //---------------------------
 
@@ -2506,7 +3117,7 @@ namespace TradeMVVM.ReadHoldings
             catch { }
         }
 
-      
+
 
         // Read the filename of the currently active CSV (Active = 1) from NEW_CSV_ACTIVE
         private string GetActiveCsvFromDb(string dbPath)
