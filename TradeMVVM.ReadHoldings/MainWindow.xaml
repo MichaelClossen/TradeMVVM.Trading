@@ -291,14 +291,17 @@
                 <!-- Time series plot of Gesamtwert for the active CSV portfolio -->
                 <ScottPlot:WpfPlot x:Name="PlotTotalValueHistory" Margin="6" />
             </Border>
-            <Border Grid.Column="0" Grid.Row="4" Background="AliceBlue">
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 2</TextBlock>
+            <Border Grid.Column="0" Grid.Row="4" Background="AliceBlue" Padding="6">
+                <!-- Plot for Tops -->
+                <ScottPlot:WpfPlot x:Name="PlotTops" Margin="6" />
             </Border>
-            <Border Grid.Column="0" Grid.Row="6" Background="AliceBlue">
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 3</TextBlock>
+            <Border Grid.Column="0" Grid.Row="6" Background="AliceBlue" Padding="6">
+                <!-- Plot for All -->
+                <ScottPlot:WpfPlot x:Name="PlotAll" Margin="6" />
             </Border>
             <Border Grid.Column="0" Grid.Row="8" Padding="6" Background="AliceBlue">
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#FF666666" >Rechts - Bereich 4</TextBlock>
+                <!-- Plot for Bottoms -->
+                <ScottPlot:WpfPlot x:Name="PlotBottoms" Margin="6" />
             </Border>
         </Grid>
     </Grid>

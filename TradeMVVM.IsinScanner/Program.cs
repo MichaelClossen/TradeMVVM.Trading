@@ -77,83 +77,83 @@ partial class Program
         // Ensure NEW_CSV_ACTIVE has an Id INTEGER PRIMARY KEY AUTOINCREMENT by performing
         // a best-effort migration when the column is missing.
         public static int? GetActiveCsvRowIdFromDb(string dbPath)
-    {
-        try
         {
-            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return null;
-            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
-            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
-            conn.Open();
-
-            // Ensure table exists and has Id column. If not, attempt migration to a new table
-            // with an AUTOINCREMENT Id and copy CSV/Active/Created columns.
             try
             {
-                var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                using (var p = conn.CreateCommand())
-                {
-                    p.CommandText = "PRAGMA table_info(NEW_CSV_ACTIVE);";
-                    using var r = p.ExecuteReader();
-                    while (r.Read()) cols.Add(r.GetString(1));
-                }
+                if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return null;
+                var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+                conn.Open();
 
-                if (!cols.Contains("Id"))
+                // Ensure table exists and has Id column. If not, attempt migration to a new table
+                // with an AUTOINCREMENT Id and copy CSV/Active/Created columns.
+                try
                 {
-                    try
+                    var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    using (var p = conn.CreateCommand())
                     {
-                        using var tx = conn.BeginTransaction();
-                        using var c1 = conn.CreateCommand();
-                        c1.CommandText = @"
+                        p.CommandText = "PRAGMA table_info(NEW_CSV_ACTIVE);";
+                        using var r = p.ExecuteReader();
+                        while (r.Read()) cols.Add(r.GetString(1));
+                    }
+
+                    if (!cols.Contains("Id"))
+                    {
+                        try
+                        {
+                            using var tx = conn.BeginTransaction();
+                            using var c1 = conn.CreateCommand();
+                            c1.CommandText = @"
 CREATE TABLE IF NOT EXISTS NEW_CSV_ACTIVE_new (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
     CSV TEXT UNIQUE,
     Active INTEGER,
     Created TEXT
 );";
-                        c1.ExecuteNonQuery();
+                            c1.ExecuteNonQuery();
 
-                        using var c2 = conn.CreateCommand();
-                        c2.CommandText = @"INSERT INTO NEW_CSV_ACTIVE_new (CSV, Active, Created)
+                            using var c2 = conn.CreateCommand();
+                            c2.CommandText = @"INSERT INTO NEW_CSV_ACTIVE_new (CSV, Active, Created)
 SELECT CSV, Active, Created FROM NEW_CSV_ACTIVE;";
-                        try { c2.ExecuteNonQuery(); } catch { }
+                            try { c2.ExecuteNonQuery(); } catch { }
 
-                        using var c3 = conn.CreateCommand();
-                        c3.CommandText = "DROP TABLE IF EXISTS NEW_CSV_ACTIVE;";
-                        c3.ExecuteNonQuery();
+                            using var c3 = conn.CreateCommand();
+                            c3.CommandText = "DROP TABLE IF EXISTS NEW_CSV_ACTIVE;";
+                            c3.ExecuteNonQuery();
 
-                        using var c4 = conn.CreateCommand();
-                        c4.CommandText = "ALTER TABLE NEW_CSV_ACTIVE_new RENAME TO NEW_CSV_ACTIVE;";
-                        c4.ExecuteNonQuery();
+                            using var c4 = conn.CreateCommand();
+                            c4.CommandText = "ALTER TABLE NEW_CSV_ACTIVE_new RENAME TO NEW_CSV_ACTIVE;";
+                            c4.ExecuteNonQuery();
 
-                        tx.Commit();
+                            tx.Commit();
+                        }
+                        catch { /* migration failed - continue and try to query anyway */ }
                     }
-                    catch { /* migration failed - continue and try to query anyway */ }
-                }
-            }
-            catch { }
-
-            try
-            {
-                // Ensure CSV column is unique by creating a unique index if missing.
-                try
-                {
-                    using var idxCmd = conn.CreateCommand();
-                    idxCmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_new_csv_active_csv ON NEW_CSV_ACTIVE (CSV);";
-                    idxCmd.ExecuteNonQuery();
                 }
                 catch { }
 
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT Id FROM NEW_CSV_ACTIVE WHERE Active = 1 ORDER BY Created DESC LIMIT 1;";
-                var res = cmd.ExecuteScalar();
-                if (res == null || res == DBNull.Value) return null;
-                try { return Convert.ToInt32(res, CultureInfo.InvariantCulture); } catch { return null; }
+                try
+                {
+                    // Ensure CSV column is unique by creating a unique index if missing.
+                    try
+                    {
+                        using var idxCmd = conn.CreateCommand();
+                        idxCmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_new_csv_active_csv ON NEW_CSV_ACTIVE (CSV);";
+                        idxCmd.ExecuteNonQuery();
+                    }
+                    catch { }
+
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT Id FROM NEW_CSV_ACTIVE WHERE Active = 1 ORDER BY Created DESC LIMIT 1;";
+                    var res = cmd.ExecuteScalar();
+                    if (res == null || res == DBNull.Value) return null;
+                    try { return Convert.ToInt32(res, CultureInfo.InvariantCulture); } catch { return null; }
+                }
+                catch { return null; }
             }
             catch { return null; }
         }
-        catch { return null; }
-    }
-              
+
         public static void QuitDriver()
         {
             lock (sync)
@@ -1052,6 +1052,7 @@ SELECT CSV, Active, Created FROM NEW_CSV_ACTIVE;";
                                     // Persist found values and report — treat as successful result
                                     var updatedStrFb = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                                     UpsertNewHolding(dbPath, isin, fb.Price, fb.Change != null && !fb.Change.StartsWith("n/a") ? (double?)ParseDecimalToDouble(fb.Change.Replace("%", "")) : null, updatedStrFb, fb.Source);
+                                    try { InsertNewPrice(dbPath, isin, fb.Price, fb.Change, updatedStrFb); } catch { }
                                     // Log DB update and provider status in the same format as successful provider results
                                     var bestPriceStr = fb.Price.ToString("0.000", CultureInfo.GetCultureInfo("de-DE")) + " €";
                                     string changeStr = "n/a";
@@ -1133,6 +1134,7 @@ SELECT CSV, Active, Created FROM NEW_CSV_ACTIVE;";
                             var updatedStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                             // include provider information when writing to NEW_Holdings
                             UpsertNewHolding(dbPath, isin, priceNum, pct, updatedStr, result.BestProvider);
+                            try { InsertNewPrice(dbPath, isin, priceNum, result.Change, updatedStr); } catch { }
                             Console.WriteLine($"DB: NEW_Holdings aktualisiert für {isin}: purchaseValue={priceNum} percent={(pct.HasValue ? pct.Value.ToString("0.00") : "NULL")} updated={updatedStr} provider={result.BestProvider}");
                         }
                     }
@@ -2459,6 +2461,40 @@ CREATE TABLE IF NOT EXISTS NEW_ISIN_WKN (
                 catch { }
             }
             catch { }
+
+            conn.Close();
+        }
+        catch { }
+    }
+
+    // Insert a price snapshot into NEW_Prices table. Creates the table if it doesn't exist.
+    static void InsertNewPrice(string dbPath, string isin, double price, string change, string datum)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath)) return;
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            conn.Open();
+
+            using var create = conn.CreateCommand();
+            create.CommandText = @"
+CREATE TABLE IF NOT EXISTS NEW_Prices (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Isin TEXT,
+    Price REAL,
+    Change TEXT,
+    Datum TEXT
+);";
+            try { create.ExecuteNonQuery(); } catch { }
+
+            using var ins = conn.CreateCommand();
+            ins.CommandText = "INSERT INTO NEW_Prices (Isin, Price, Change, Datum) VALUES (@isin, @price, @change, @datum);";
+            ins.Parameters.AddWithValue("@isin", isin ?? (object)DBNull.Value);
+            ins.Parameters.AddWithValue("@price", price);
+            ins.Parameters.AddWithValue("@change", string.IsNullOrWhiteSpace(change) ? (object)DBNull.Value : change);
+            ins.Parameters.AddWithValue("@datum", datum ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            try { ins.ExecuteNonQuery(); } catch { }
 
             conn.Close();
         }

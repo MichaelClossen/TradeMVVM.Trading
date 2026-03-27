@@ -4,6 +4,7 @@ using ScottPlot;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -71,6 +72,7 @@ namespace TradeMVVM.ReadHoldings
         private DispatcherTimer? _udpStatusTimer = null;
         private readonly int _udpPort = 54123;
         // reference to checkbox in XAML to enable/disable automatic X-axis shifting
+        private bool _autoShiftEnabled = false;
         // current search filter text (null = no filter)
         private string? _currentSearch = null;
 
@@ -87,8 +89,6 @@ namespace TradeMVVM.ReadHoldings
                 if (!string.IsNullOrWhiteSpace(active))
                     try { if (TxtPath != null) TxtPath.Text = active; } catch { }
             }
-
-
             catch { }
 
             try { _baseFontSize = DgHoldings.FontSize; DgHoldings.PreviewMouseWheel += DgHoldings_PreviewMouseWheel; } catch { }
@@ -104,8 +104,9 @@ namespace TradeMVVM.ReadHoldings
             // render initial total value history once controls are loaded
             try { this.Loaded += (s, e) => { LoadAndRenderTotalValueHistory(); }; } catch { }
             try { PlotTotalValueHistory.PreviewMouseWheel += PlotTotalValueHistory_PreviewMouseWheel; } catch { }
-            // MouseWheel handler will be hooked after constructor ends (method defined below)
             try { PlotTotalValueHistory.MouseDoubleClick += PlotTotalValueHistory_MouseDoubleClick; } catch { }
+            try { PlotTotalValueHistory.PreviewMouseLeftButtonDown += PlotTotalValueHistory_PreviewMouseLeftButtonDown; } catch { }
+            // MouseWheel handler will be hooked after constructor ends (method defined below)
             try { PlotTotalValueHistory.MouseLeftButtonUp += PlotTotalValueHistory_MouseLeftButtonUp; } catch { }
             try { PlotTotalValueHistory.PreviewMouseDown += PlotTotalValueHistory_PreviewMouseDown; } catch { }
             try { PlotTotalValueHistory.PreviewMouseUp += PlotTotalValueHistory_PreviewMouseUp; } catch { }
@@ -134,6 +135,8 @@ namespace TradeMVVM.ReadHoldings
                     {
                         auto.Checked += (s, ev) => { try { AutoShiftCheckbox_Checked(s, ev); } catch { } };
                         auto.Unchecked += (s, ev) => { try { AutoShiftCheckbox_Unchecked(s, ev); } catch { } };
+                        // initialize internal flag from control state
+                        try { _autoShiftEnabled = auto.IsChecked == true; } catch { _autoShiftEnabled = false; }
                     }
                 }
                 catch { }
@@ -176,6 +179,7 @@ namespace TradeMVVM.ReadHoldings
             try
             {
                 _plotUserZoomed = false;
+                _autoShiftEnabled = true;
 
                 // optional: sofort neu zeichnen
                 LoadAndRenderTotalValueHistory();
@@ -192,6 +196,7 @@ namespace TradeMVVM.ReadHoldings
             {
                 // Benutzer übernimmt Kontrolle
                 _plotUserZoomed = true;
+                _autoShiftEnabled = false;
             }
             catch (Exception ex)
             {
@@ -340,7 +345,7 @@ namespace TradeMVVM.ReadHoldings
             catch { }
         }
 
-        
+
 
         // Interval checkbox handlers (right area 1)
         private bool _suspendIntervalHandlers = false;
@@ -799,6 +804,34 @@ namespace TradeMVVM.ReadHoldings
             catch { }
         }
 
+        // Fallback handler: sometimes WpfPlot does not raise MouseDoubleClick reliably.
+        // Detect double-click ourselves on PreviewMouseLeftButtonDown combined with Shift key.
+        private DateTime _lastPreviewLeftDown = DateTime.MinValue;
+        private void PlotTotalValueHistory_PreviewMouseLeftButtonDown(object? sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                // only consider left button
+                if (e == null || e.ChangedButton != MouseButton.Left) return;
+
+                var now = DateTime.Now;
+                var interval = now - _lastPreviewLeftDown;
+                _lastPreviewLeftDown = now;
+
+                // treat as double-click if within 500ms
+                if (interval.TotalMilliseconds <= 500)
+                {
+                    // require Shift pressed
+                    if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
+                    {
+                        // invoke same logic as MouseDoubleClick
+                        try { PlotTotalValueHistory_MouseDoubleClick(sender, e); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
         private void PlotTotalValueHistory_PreviewMouseUp(object? sender, MouseButtonEventArgs e)
         {
             try
@@ -823,7 +856,9 @@ namespace TradeMVVM.ReadHoldings
         {
             try
             {
-                if (e == null || (Keyboard.Modifiers & ModifierKeys.Shift) != ModifierKeys.Shift) return;
+                System.Diagnostics.Debug.WriteLine("TVH: MouseDoubleClick fired");
+                // require Shift to be pressed (allow other modifiers as well) - check mask
+                if (e == null || (Keyboard.Modifiers & ModifierKeys.Shift) == 0) return;
                 if (PlotTotalValueHistory == null) return;
 
                 var pos = e.GetPosition(PlotTotalValueHistory);
@@ -951,9 +986,10 @@ namespace TradeMVVM.ReadHoldings
                         try { if (_suppressAutoApply) return; } catch { }
                         if (PlotTotalValueHistory == null) return;
                         // If the user explicitly selected a fixed interval, ensure it stays applied
+                        // Only reapply periodically when automatic shifting is enabled (_autoShiftEnabled).
                         try
                         {
-                            if (_forcedIntervalUserSet && _forcedInterval.HasValue && _totalValueTimes != null && _totalValueTimes.Count > 0)
+                            if (_autoShiftEnabled && _forcedIntervalUserSet && _forcedInterval.HasValue && _totalValueTimes != null && _totalValueTimes.Count > 0)
                             {
                                 var pltF = PlotTotalValueHistory.Plot;
                                 var dataMaxOa = _totalValueTimes.Last().ToOADate();
@@ -973,8 +1009,8 @@ namespace TradeMVVM.ReadHoldings
                             }
                         }
                         catch { }
-                        // respect user toggle (access checkbox via FindName to avoid duplicate member ambiguity)
-                        try { if (!(((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true)) return; } catch { return; }
+                        // respect user toggle (use internal flag for reliability)
+                        try { if (!_autoShiftEnabled) return; } catch { return; }
 
                         var plt = PlotTotalValueHistory.Plot;
 
@@ -1345,6 +1381,92 @@ namespace TradeMVVM.ReadHoldings
 
             return list;
         }
+
+        // Load NEW_Prices grouped by ISIN. Returns dictionary ISIN -> list of (time, change) sorted by time.
+        private Dictionary<string, List<(DateTime time, double change)>> LoadNewPricesByIsin()
+        {
+            var dict = new Dictionary<string, List<(DateTime, double)>>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var cs = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+                using var conn = new SqliteConnection(cs);
+                conn.Open();
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT Isin, Datum, Change FROM NEW_Prices ORDER BY Isin, Datum;";
+
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    try
+                    {
+                        var isinObj = reader[0];
+                        var timeObj = reader[1];
+                        var changeObj = reader[2];
+
+                        if (isinObj == null || isinObj == DBNull.Value) continue;
+                        var isin = isinObj.ToString();
+                        if (string.IsNullOrWhiteSpace(isin)) continue;
+
+                        DateTime time;
+                        if (timeObj is DateTime dt) time = dt;
+                        else
+                        {
+                            var s = timeObj?.ToString();
+                            if (!DateTime.TryParse(s, out time))
+                            {
+                                // try numeric
+                                if (long.TryParse(s, out var lv))
+                                {
+                                    if (Math.Abs(lv) > 1000000000000L) time = DateTimeOffset.FromUnixTimeMilliseconds(lv).DateTime;
+                                    else if (Math.Abs(lv) > 1000000000L) time = DateTimeOffset.FromUnixTimeSeconds(lv).DateTime;
+                                    else time = DateTime.FromOADate(lv);
+                                }
+                                else continue;
+                            }
+                        }
+
+                        if (changeObj == null || changeObj == DBNull.Value) continue;
+                        var changeText = changeObj.ToString();
+                        if (string.IsNullOrWhiteSpace(changeText)) continue;
+                        changeText = changeText.Replace("%", "").Trim();
+                        if (!double.TryParse(changeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double change)) continue;
+
+                        if (!dict.TryGetValue(isin, out var list))
+                        {
+                            list = new List<(DateTime, double)>();
+                            dict[isin] = list;
+                        }
+                        list.Add((time, change));
+                    }
+                    catch { }
+                }
+
+                // sort each list by time
+                foreach (var k in dict.Keys.ToList())
+                {
+                    try { dict[k] = dict[k].OrderBy(p => p.Item1).ToList(); } catch { }
+                }
+            }
+            catch { }
+            return dict;
+        }
+
+      
+        private static double ToMedian(IEnumerable<double> values)
+        {
+            try
+            {
+                if (values == null) return 0.0;
+                var arr = values.Where(d => !double.IsNaN(d) && !double.IsInfinity(d)).OrderBy(d => d).ToArray();
+                if (arr.Length == 0) return 0.0;
+                int n = arr.Length;
+                if ((n & 1) == 1) return arr[n / 2];
+                return (arr[n / 2 - 1] + arr[n / 2]) / 2.0;
+            }
+            catch { return 0.0; }
+        }
+
         private void RenderTotalValuePlot(
             List<(DateTime time, double avg, double today, long rowid)> points)
         {
@@ -1356,17 +1478,31 @@ namespace TradeMVVM.ReadHoldings
 
             plt.Clear();
 
-            var xs =
-                points.Select(p => p.time.ToOADate()).ToArray();
+            var xs = points.Select(p => p.time.ToOADate()).ToArray();
 
-            var ysAvg =
-                points.Select(p => p.avg).ToArray();
+            var ysToday = points.Select(p => p.today).ToArray();
 
-            var ysToday =
-                points.Select(p => p.today).ToArray();
+            // cache times and row ids so interactive actions (double-click delete) can map back to DB rows
+            try
+            {
+                _totalValueTimes = points.Select(p => p.time).ToList();
+                _totalValueRowIds = points.Select(p => (long?)p.rowid).ToList();
+                // compute median delta for tolerant matching used during delete
+                try
+                {
+                    if (_totalValueTimes != null && _totalValueTimes.Count >= 2)
+                    {
+                        var deltas = new List<double>();
+                        for (int i = 1; i < _totalValueTimes.Count; i++) deltas.Add((_totalValueTimes[i] - _totalValueTimes[i - 1]).TotalDays);
+                        _totalValueMedianDeltaDays = deltas.Count > 0 ? ToMedian(deltas) : 1.0;
+                    }
+                    else _totalValueMedianDeltaDays = 1.0;
+                }
+                catch { _totalValueMedianDeltaDays = 1.0; }
+            }
+            catch { }
 
-            // add series
-            var scAvg = plt.Add.Scatter(xs, ysAvg);
+            // add series (only 'today' series is displayed to avoid showing overall series)
             var scToday = plt.Add.Scatter(xs, ysToday);
 
             try { plt.Axes.DateTimeTicksBottom(); } catch { }
@@ -1375,8 +1511,9 @@ namespace TradeMVVM.ReadHoldings
             double currentXMin = double.NaN, currentXMax = double.NaN;
             try
             {
+                // use internal flag instead of querying UI control every render/tick
                 bool autoShiftEnabled = false;
-                try { autoShiftEnabled = ((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true; } catch { }
+                try { autoShiftEnabled = _autoShiftEnabled; } catch { autoShiftEnabled = false; }
 
                 // If auto-shift is enabled, ignore any user zoom and compute range based on forced interval or data
                 if (autoShiftEnabled)
@@ -1462,20 +1599,15 @@ namespace TradeMVVM.ReadHoldings
                 {
                     var x = xs[i];
                     if (x < currentXMin || x > currentXMax) continue;
-                    if (ysAvg != null && i < ysAvg.Length)
-                    {
-                        var v = ysAvg[i]; if (!double.IsNaN(v) && !double.IsInfinity(v)) { minY = Math.Min(minY, v); maxY = Math.Max(maxY, v); }
-                    }
                     if (ysToday != null && i < ysToday.Length)
                     {
                         var v2 = ysToday[i]; if (!double.IsNaN(v2) && !double.IsInfinity(v2)) { minY = Math.Min(minY, v2); maxY = Math.Max(maxY, v2); }
                     }
                 }
-                // if no points inside range, fallback to full data
+                // if no points inside range, fallback to full data (use today series only)
                 if (double.IsInfinity(minY) || double.IsInfinity(maxY))
                 {
-                    if (ysAvg != null && ysAvg.Length > 0) { minY = ysAvg.Min(); maxY = ysAvg.Max(); }
-                    if (ysToday != null && ysToday.Length > 0) { minY = Math.Min(minY, ysToday.Min()); maxY = Math.Max(maxY, ysToday.Max()); }
+                    if (ysToday != null && ysToday.Length > 0) { minY = ysToday.Min(); maxY = ysToday.Max(); }
                 }
             }
             catch { }
@@ -1496,891 +1628,362 @@ namespace TradeMVVM.ReadHoldings
             }
             catch { }
 
-            // Apply Y limits computed for visible X range
+            // Apply Y limits computed for visible X range with at least 5% padding above and below.
             try
             {
                 if (!(double.IsInfinity(minY) || double.IsInfinity(maxY)))
                 {
-                    var range = Math.Max(1e-9, maxY - minY);
-                    var pad = range * 0.05;
+                    double visibleRange = Math.Max(1e-9, maxY - minY);
+
+                    // compute total data range so padding can be at least 5% of overall data (avoid too-small pad)
+                    double totalMinY = double.PositiveInfinity, totalMaxY = double.NegativeInfinity;
+                    try
+                    {
+                        if (ysToday != null && ysToday.Length > 0) { totalMinY = Math.Min(totalMinY, ysToday.Min()); totalMaxY = Math.Max(totalMaxY, ysToday.Max()); }
+                        if (double.IsInfinity(totalMinY) || double.IsInfinity(totalMaxY)) { totalMinY = minY; totalMaxY = maxY; }
+                    }
+                    catch { totalMinY = minY; totalMaxY = maxY; }
+
+                    double totalRange = Math.Max(1e-9, totalMaxY - totalMinY);
+
+                    // choose pad as the larger of 5% of visible range and 5% of total data range
+                    double pad = Math.Max(visibleRange * 0.05, totalRange * 0.05);
+
+                    // if visible range is effectively zero, ensure a sensible absolute pad
+                    if (visibleRange < 1e-9)
+                    {
+                        double baseVal = Math.Max(Math.Abs(maxY), 1.0);
+                        pad = Math.Max(pad, baseVal * 0.05);
+                    }
+
                     try { plt.Axes.SetLimitsY(minY - pad, maxY + pad); } catch { }
                 }
             }
             catch { }
 
             PlotTotalValueHistory.Refresh();
+
+            // Also render copies into the right-area plots (duplicate rendering)
+            try
+            {
+                // prepare arrays for duplicate plots
+                var xsDup = xs;
+                var ysDup = ysToday;
+
+                // compute final Y limits used for main plot (if set)
+                double? finalYMin = null, finalYMax = null;
+                try
+                {
+                    if (!(double.IsInfinity(minY) || double.IsInfinity(maxY)))
+                    {
+                        double visibleRange = Math.Max(1e-9, maxY - minY);
+                        double totalMinY = double.PositiveInfinity, totalMaxY = double.NegativeInfinity;
+                        try
+                        {
+                            if (ysToday != null && ysToday.Length > 0) { totalMinY = Math.Min(totalMinY, ysToday.Min()); totalMaxY = Math.Max(totalMaxY, ysToday.Max()); }
+                            if (double.IsInfinity(totalMinY) || double.IsInfinity(totalMaxY)) { totalMinY = minY; totalMaxY = maxY; }
+                        }
+                        catch { totalMinY = minY; totalMaxY = maxY; }
+                        double totalRange = Math.Max(1e-9, totalMaxY - totalMinY);
+                        double pad = Math.Max(visibleRange * 0.05, totalRange * 0.05);
+                        if (visibleRange < 1e-9)
+                        {
+                            double baseVal = Math.Max(Math.Abs(maxY), 1.0);
+                            pad = Math.Max(pad, baseVal * 0.05);
+                        }
+                        finalYMin = minY - pad;
+                        finalYMax = maxY + pad;
+                    }
+                }
+                catch { }
+                //TODO
+                // render into Tops, All and Bottoms plots with titles (use FindName to avoid relying on generated fields)
+                try
+                {
+                    var pt = this.FindName("PlotTops") as ScottPlot.WPF.WpfPlot;
+                    if (pt != null) RenderCopyPlot(pt, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                }
+                catch { }
+                try
+                {
+                    var pa = this.FindName("PlotAll") as ScottPlot.WPF.WpfPlot;
+                    if (pa != null)
+                    {
+                        // Instead of duplicating TotalValues here, load data from NEW_Prices and render
+                        try
+                        {
+                            var changePoints = LoadNewPricesPoints();
+                      
+
+                            // load per-ISIN series and render each as its own line
+                            var changeSeries = LoadNewPricesByIsin();
+                            if (changeSeries != null && changeSeries.Count > 0)
+                            {
+                                var pltTarget = pa.Plot;
+                                pltTarget.Clear();
+
+                                double globalMin = double.PositiveInfinity, globalMax = double.NegativeInfinity;
+
+                                foreach (var kv in changeSeries.OrderBy(k => k.Key))
+                                {
+                                    try
+                                    {
+                                        var isin = kv.Key;
+                                        var list = kv.Value;
+                                        if (list == null || list.Count == 0) continue;
+
+                                        var xsSeries = list.Select(p => p.Item1.ToOADate()).ToArray();
+                                        var ysSeries = list.Select(p => p.Item2).ToArray();
+
+                                        // add series
+                                        var pl = pltTarget.Add.Scatter(xsSeries, ysSeries);
+                                        try
+                                        {
+                                            var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
+                                            if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, isin);
+                                        }
+                                        catch { }
+
+                                        // update global min/max
+                                        for (int i = 0; i < ysSeries.Length; i++)
+                                        {
+                                            var v = ysSeries[i];
+                                            if (!double.IsNaN(v) && !double.IsInfinity(v))
+                                            {
+                                                globalMin = Math.Min(globalMin, v);
+                                                globalMax = Math.Max(globalMax, v);
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+
+                                try { pltTarget.Axes.DateTimeTicksBottom(); } catch { }
+
+                                // compute Y limits with padding
+                                double yMinC = double.NaN, yMaxC = double.NaN;
+                                if (!double.IsInfinity(globalMin) && !double.IsInfinity(globalMax))
+                                {
+                                    var range = Math.Max(1e-9, globalMax - globalMin);
+                                    var pad = Math.Max(0.5, range * 0.1);
+                                    yMinC = globalMin - pad;
+                                    yMaxC = globalMax + pad;
+                                }
+                                else
+                                {
+                                    yMinC = (double?)finalYMin ?? -1.0;
+                                    yMaxC = (double?)finalYMax ?? 1.0;
+                                }
+
+                                // apply X/Y limits
+                                try { if (!double.IsNaN(currentXMin) && !double.IsNaN(currentXMax)) pltTarget.Axes.SetLimitsX(currentXMin, currentXMax); } catch { }
+                                try { pltTarget.Axes.SetLimitsY(yMinC, yMaxC); } catch { }
+
+                                // do not show legend for Change plot (keep UI compact)
+                                try { pltTarget.Legend.IsVisible = false; } catch { }
+
+                                pa.Refresh();
+                            }
+                        }
+                        catch
+                        {
+                            // on any error, fallback to original behavior
+                            RenderCopyPlot(pa, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                        }
+                    }
+                }
+                catch { }
+                try
+                {
+                    var pb = this.FindName("PlotBottoms") as ScottPlot.WPF.WpfPlot;
+                    if (pb != null) RenderCopyPlot(pb, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                }
+                catch { }
+            }
+            catch { }
         }
 
-        // Load total value history for the active CSV portfolio from NEW_TotalValues and render into ScottPlot
-        //private void LoadAndRenderTotalValueHistory()
-        //{
-        //    try
-        //    {
-        //        System.Threading.Tasks.Task.Run(() =>
-        //        {
-        //            try
-        //            {
-        //                // read active CSV name (filename) and then load history rows for that portfolio
-        //                var activeCsv = GetActiveCsvFromDb(_dbPath);
-        //                if (string.IsNullOrWhiteSpace(activeCsv)) return;
+        private List<(DateTime time, double change)> LoadNewPricesPoints()
+        {
+            var list = new List<(DateTime time, double change)>();
+            try
+            {
+                var cs = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
+                using var conn = new SqliteConnection(cs);
+                conn.Open();
 
-        //                // reset caches for this load
-        //                _totalValueRowIds = new List<long?>();
-        //                var points = new List<(DateTime time, double avg, double today)>();
-        //                // read from sqlite - detect actual column names for Created and SumTodayValue, optionally filter by portfolio/CSV
-        //                try
-        //                {
-        //                    var csb = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
-        //                    using var conn = new Microsoft.Data.Sqlite.SqliteConnection(csb);
-        //                    conn.Open();
+                // First try the common column names directly
+                try
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT Datum, Change FROM NEW_Prices ORDER BY Datum;";
+                    using var reader = cmd.ExecuteReader();
+                    if (reader != null)
+                    {
+                        while (reader.Read())
+                        {
+                            try
+                            {
+                                var datumObj = reader[0];
+                                DateTime time;
+                                if (datumObj is DateTime dt) time = dt;
+                                else
+                                {
+                                    var datumText = datumObj?.ToString();
+                                    if (!DateTime.TryParse(datumText, out time))
+                                        continue;
+                                }
 
-        //                    // inspect table columns
-        //                    var createdCol = "Created";
-        //                    var valueAvgCol = "SumAvgTotal";
-        //                    var valueTodayCol = "SumTodayValue";
-        //                    var portfolioCol = (string?)null;
-        //                    try
-        //                    {
-        //                        using var pragma = conn.CreateCommand();
-        //                        pragma.CommandText = "PRAGMA table_info(NEW_TotalValues);";
-        //                        using var r = pragma.ExecuteReader();
-        //                        var cols = new List<string>();
-        //                        while (r.Read())
-        //                        {
-        //                            try { cols.Add(r.GetString(1)); } catch { }
-        //                        }
-        //                        // pick created/last-updated column. Prefer explicit "LastUpdated" when present.
-        //                        var candidatesCreated = new[] { "LastUpdated", "Created", "Time", "Timestamp", "CreatedAt" };
-        //                        createdCol = cols.FirstOrDefault(c => candidatesCreated.Any(cc => string.Equals(c, cc, StringComparison.OrdinalIgnoreCase))) ?? cols.FirstOrDefault() ?? "LastUpdated";
-        //                        // pick value column
-        //                        var candidatesValueAvg = new[] { "SumAvgTotal", "SumAvg", "AvgTotal", "SumAvg" };
-        //                        var candidatesValueToday = new[] { "SumTodayValue", "SumToday", "SumTodayVal", "TodayValue" };
-        //                        valueAvgCol = cols.FirstOrDefault(c => candidatesValueAvg.Any(cc => string.Equals(c, cc, StringComparison.OrdinalIgnoreCase))) ?? cols.FirstOrDefault(c => c.IndexOf("Avg", StringComparison.OrdinalIgnoreCase) >= 0) ?? (cols.Count > 2 ? cols[2] : cols.FirstOrDefault() ?? "SumAvgTotal");
-        //                        valueTodayCol = cols.FirstOrDefault(c => candidatesValueToday.Any(cc => string.Equals(c, cc, StringComparison.OrdinalIgnoreCase))) ?? cols.FirstOrDefault(c => c.IndexOf("Today", StringComparison.OrdinalIgnoreCase) >= 0) ?? (cols.Count > 1 ? cols[1] : cols.FirstOrDefault() ?? "SumTodayValue");
-        //                        // detect portfolio/csv column
-        //                        var candidatesPortfolio = new[] { "Portfolio", "CSV", "Csv", "PortfolioId" };
-        //                        portfolioCol = cols.FirstOrDefault(c => candidatesPortfolio.Any(cc => string.Equals(c, cc, StringComparison.OrdinalIgnoreCase)));
-        //                    }
-        //                    catch { }
+                                var changeObj = reader[1];
+                                if (changeObj == null || changeObj == DBNull.Value) continue;
+                                var changeText = changeObj.ToString();
+                                if (string.IsNullOrWhiteSpace(changeText)) continue;
+                                changeText = changeText.Replace("%", "").Trim();
+                                if (!double.TryParse(changeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double change))
+                                    continue;
 
-        //                    using var cmd = conn.CreateCommand();
+                                list.Add((time, change));
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch
+                {
+                    // ignore - we'll try a flexible fallback below
+                }
 
-        //                    // Try to read active CSV info from NEW_CSV_ACTIVE in this DB (some schemas store numeric Id)
-        //                    string activeCsvFromDb = activeCsv;
-        //                    long? activeId = null;
-        //                    try
-        //                    {
-        //                        using var cmdActive = conn.CreateCommand();
-        //                        cmdActive.CommandText = "SELECT CSV, Id FROM NEW_CSV_ACTIVE WHERE Active = 1 LIMIT 1;";
-        //                        using var r2 = cmdActive.ExecuteReader();
-        //                        if (r2.Read())
-        //                        {
-        //                            try { if (!r2.IsDBNull(0)) activeCsvFromDb = r2.GetString(0); } catch { }
-        //                            try { if (!r2.IsDBNull(1)) activeId = r2.GetInt64(1); } catch { }
-        //                        }
-        //                    }
-        //                    catch { }
+                // if we didn't get any points, try a flexible column-detection approach
+                if (list.Count == 0)
+                {
+                    try
+                    {
+                        // inspect columns
+                        var cols = new List<string>();
+                        using (var pragma = conn.CreateCommand())
+                        {
+                            pragma.CommandText = "PRAGMA table_info(NEW_Prices);";
+                            using var r = pragma.ExecuteReader();
+                            while (r.Read())
+                            {
+                                try { cols.Add(r.GetString(1)); } catch { }
+                            }
+                        }
 
-        //                    if (!string.IsNullOrWhiteSpace(portfolioCol))
-        //                    {
-        //                        // include rowid so we can delete specific DB rows reliably later
-        //                        cmd.CommandText = $"SELECT \"{createdCol}\", \"{valueAvgCol}\", \"{valueTodayCol}\", rowid FROM NEW_TotalValues WHERE \"{portfolioCol}\" = $portfolio OR \"{portfolioCol}\" = $portfolioId ORDER BY \"{createdCol}\" ASC;";
-        //                        cmd.Parameters.AddWithValue("$portfolio", activeCsvFromDb ?? string.Empty);
-        //                        cmd.Parameters.AddWithValue("$portfolioId", activeId.HasValue ? (object)activeId.Value : DBNull.Value);
-        //                    }
-        //                    else
-        //                    {
-        //                        // include rowid so we can delete specific DB rows reliably later
-        //                        cmd.CommandText = $"SELECT \"{createdCol}\", \"{valueAvgCol}\", \"{valueTodayCol}\", rowid FROM NEW_TotalValues ORDER BY \"{createdCol}\" ASC;";
-        //                    }
+                        if (cols.Count > 0)
+                        {
+                            var timeCandidates = new[] { "LastUpdated", "Created", "Time", "Timestamp", "Datum", "Date", "ProviderTime" };
+                            var valueCandidates = new[] { "Change", "Percent", "Price", "Value", "LastPrice" };
 
-        //                    using var reader = cmd.ExecuteReader();
-        //                    while (reader.Read())
-        //                    {
-        //                        try
-        //                        {
-        //                            DateTime? created = null;
-        //                            try
-        //                            {
-        //                                var obj = reader.GetValue(0);
-        //                                if (obj is DateTime dt) created = dt;
-        //                                if (obj is string s)
-        //                                {
-        //                                    // try multiple common formats including German format used by this app
-        //                                    if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var pdt)) created = pdt;
-        //                                    else if (DateTime.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out pdt)) created = pdt;
-        //                                    else if (DateTime.TryParseExact(s, new[] { "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "yyyy-MM-ddTHH:mm:ssZ", "o", "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy" }, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out pdt)) created = pdt;
-        //                                    else
-        //                                    {
-        //                                        // sometimes LastUpdated might be a numeric string (ticks or unix ms)
-        //                                        if (long.TryParse(s, out var lv))
-        //                                        {
-        //                                            if (Math.Abs(lv) > 1000000000000L) created = DateTimeOffset.FromUnixTimeMilliseconds(lv).DateTime;
-        //                                            else if (Math.Abs(lv) > 1000000000L) created = DateTimeOffset.FromUnixTimeSeconds(lv).DateTime;
-        //                                            else created = DateTime.FromOADate(lv);
-        //                                        }
-        //                                    }
-        //                                }
+                            var timeCol = cols.FirstOrDefault(c => timeCandidates.Any(tc => string.Equals(c, tc, StringComparison.OrdinalIgnoreCase))) ?? cols.FirstOrDefault();
+                            var valueCol = cols.FirstOrDefault(c => valueCandidates.Any(vc => string.Equals(c, vc, StringComparison.OrdinalIgnoreCase)))
+                                           ?? cols.FirstOrDefault(c => c.IndexOf("price", StringComparison.OrdinalIgnoreCase) >= 0)
+                                           ?? cols.Skip(1).FirstOrDefault();
 
+                            if (!string.IsNullOrWhiteSpace(timeCol) && !string.IsNullOrWhiteSpace(valueCol))
+                            {
+                                using var cmd2 = conn.CreateCommand();
+                                cmd2.CommandText = $"SELECT \"{timeCol}\", \"{valueCol}\" FROM NEW_Prices ORDER BY \"{timeCol}\";";
+                                using var rdr = cmd2.ExecuteReader();
+                                while (rdr.Read())
+                                {
+                                    try
+                                    {
+                                        // parse time
+                                        DateTime? time = null;
+                                        var to = rdr.GetValue(0);
+                                        if (to is DateTime ddt) time = ddt;
+                                        else if (to is long l)
+                                        {
+                                            if (Math.Abs(l) > 1000000000000L) time = DateTimeOffset.FromUnixTimeMilliseconds(l).DateTime;
+                                            else if (Math.Abs(l) > 1000000000L) time = DateTimeOffset.FromUnixTimeSeconds(l).DateTime;
+                                            else time = DateTime.FromOADate(l);
+                                        }
+                                        else if (to is double db)
+                                        {
+                                            if (Math.Abs(db) > 1e12) time = DateTimeOffset.FromUnixTimeMilliseconds((long)db).DateTime;
+                                            else if (Math.Abs(db) > 1e9) time = DateTimeOffset.FromUnixTimeSeconds((long)db).DateTime;
+                                            else time = DateTime.FromOADate(db);
+                                        }
+                                        else
+                                        {
+                                            var s = to?.ToString();
+                                            if (!string.IsNullOrWhiteSpace(s))
+                                            {
+                                                if (!DateTime.TryParse(s, out var pd))
+                                                {
+                                                    // try parsing numeric string
+                                                    if (long.TryParse(s, out var lv))
+                                                    {
+                                                        if (Math.Abs(lv) > 1000000000000L) time = DateTimeOffset.FromUnixTimeMilliseconds(lv).DateTime;
+                                                        else if (Math.Abs(lv) > 1000000000L) time = DateTimeOffset.FromUnixTimeSeconds(lv).DateTime;
+                                                        else time = DateTime.FromOADate(lv);
+                                                    }
+                                                }
+                                                else time = pd;
+                                            }
+                                        }
 
-        //                                else if (obj is long l)
-        //                                {
-        //                                    // treat large numbers as unix milliseconds, medium as unix seconds, small as OADate
-        //                                    if (Math.Abs(l) > 1000000000000L) // > ~2001-09-09 in ms
-        //                                        created = DateTimeOffset.FromUnixTimeMilliseconds(l).DateTime;
-        //                                    else if (Math.Abs(l) > 1000000000L) // > ~2001 in seconds
-        //                                        created = DateTimeOffset.FromUnixTimeSeconds(l).DateTime;
-        //                                    else
-        //                                        created = DateTime.FromOADate(l);
-        //                                }
-        //                                else if (obj is double d)
-        //                                {
-        //                                    // similar heuristic for double
-        //                                    if (Math.Abs(d) > 1e12) // treat as ms
-        //                                        created = DateTimeOffset.FromUnixTimeMilliseconds((long)d).DateTime;
-        //                                    else if (Math.Abs(d) > 1e9) // treat as seconds
-        //                                        created = DateTimeOffset.FromUnixTimeSeconds((long)d).DateTime;
-        //                                    else
-        //                                        created = DateTime.FromOADate(d);
-        //                                }
-        //                            }
-        //                            catch { }
+                                        if (!time.HasValue) continue;
 
-        //                            double avg = 0.0;
-        //                            double today = 0.0;
-        //                            long rowid = -1;
-        //                            try { avg = reader.IsDBNull(1) ? 0.0 : Convert.ToDouble(reader.GetValue(1), CultureInfo.InvariantCulture); } catch { }
-        //                            try { today = reader.IsDBNull(2) ? 0.0 : Convert.ToDouble(reader.GetValue(2), CultureInfo.InvariantCulture); } catch { }
-        //                            try { if (!reader.IsDBNull(3)) rowid = Convert.ToInt64(reader.GetValue(3)); } catch { }
+                                        // parse value
+                                        var vo = rdr.GetValue(1);
+                                        if (vo == null || vo == DBNull.Value) continue;
+                                        var vs = vo.ToString();
+                                        if (string.IsNullOrWhiteSpace(vs)) continue;
+                                        vs = vs.Replace("%", "").Trim();
+                                        if (!double.TryParse(vs, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double v)) continue;
 
-        //                            if (created.HasValue)
-        //                            {
-        //                                points.Add((created.Value, avg, today));
-        //                                // store rowid aligned with points
-        //                                try { if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>(); _totalValueRowIds.Add(rowid >= 0 ? (long?)rowid : null); } catch { try { if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>(); _totalValueRowIds.Add(null); } catch { } }
-        //                            }
-        //                        }
-        //                        catch { }
-        //                    }
+                                        list.Add((time.Value, v));
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
 
-        //                    conn.Close();
-        //                }
-        //                catch { }
+                // ensure sorted
+                if (list.Count > 1) list = list.OrderBy(p => p.Item1).ToList();
+            }
+            catch { }
 
-        //                if (points.Count == 0) return;
+            return list;
+        }
+        // Simple helper to render a copy of the timeseries into another WpfPlot
+        private void RenderCopyPlot(ScottPlot.WPF.WpfPlot target, double[] xs, double[] ys, string title, double? xMin = null, double? xMax = null, double? yMin = null, double? yMax = null)
+        {
+            try
+            {
+                if (target == null) return;
+                var plt = target.Plot;
+                if (plt == null) return;
+                plt.Clear();
+                plt.Add.Scatter(xs, ys);
+                try { plt.Axes.DateTimeTicksBottom(); } catch { }
+                try { plt.Title(title); } catch { }
 
-        //                // prepare arrays for ScottPlot (use DateTime OADate for X axis)
-        //                var xs = points.Select(p => p.time.ToOADate()).ToArray();
-        //                var ysAvg = points.Select(p => p.avg).ToArray();
-        //                var ysToday = points.Select(p => p.today).ToArray();
-        //                // ensure _totalValueRowIds aligns with points; if none captured, create placeholders
-        //                try
-        //                {
-        //                    if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>();
-        //                    if (_totalValueRowIds.Count != points.Count)
-        //                    {
-        //                        var newIds = new List<long?>();
-        //                        for (int i = 0; i < points.Count; i++) newIds.Add(i < _totalValueRowIds.Count ? _totalValueRowIds[i] : null);
-        //                        _totalValueRowIds = newIds;
-        //                    }
-        //                }
-        //                catch { }
+                // apply X/Y limits if provided so copies respect interval/auto-shift/user zoom
+                try
+                {
+                    if (xMin.HasValue && xMax.HasValue)
+                        plt.Axes.SetLimitsX(xMin.Value, xMax.Value);
+                }
+                catch { }
+                try
+                {
+                    if (yMin.HasValue && yMax.HasValue)
+                        plt.Axes.SetLimitsY(yMin.Value, yMax.Value);
+                }
+                catch { }
 
-        //                // diagnostic logging: sample values (avoid referencing local DB column vars out of scope)
-        //                try
-        //                {
-        //                    System.Diagnostics.Debug.WriteLine($"LoadAndRenderTotalValueHistory: points.Count={points.Count}, xs.Length={xs.Length}");
-        //                    for (int i = 0; i < Math.Min(5, xs.Length); i++)
-        //                    {
-        //                        try
-        //                        {
-        //                            var oa = xs[i];
-        //                            var dt = DateTime.FromOADate(oa);
-        //                            System.Diagnostics.Debug.WriteLine($"  sample[{i}] oa={oa} dt={dt:o} avg={ysAvg[i]} today={ysToday[i]}");
-        //                        }
-        //                        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("  sample parse error: " + ex.Message); }
-        //                    }
-        //                }
-        //                catch { }
+                target.Refresh();
+            }
+            catch { }
+        }
 
-        //                this.Dispatcher.BeginInvoke(new Action(() =>
-        //                {
-        //                    try
-        //                    {
-        //                        if (PlotTotalValueHistory == null) return;
-        //                        var plt = PlotTotalValueHistory.Plot;
-        //                        // computed chosen limits (populated when new data is processed)
-        //                        double? computedChosenMin = null, computedChosenMax = null;
-        //                        // if the user previously zoomed/panned, prefer the stored user limits (_userXMin/_userXMax).
-        //                        // Also capture the current plot axis limits BEFORE clearing so we can compute the previous window width reliably.
-        //                        double? userPrevMin = null, userPrevMax = null;
-        //                        double? prevAxisMin = null, prevAxisMax = null;
-        //                        double? prevYMin = null, prevYMax = null;
-        //                        try
-        //                        {
-        //                            if (_plotUserZoomed)
-        //                            {
-        //                                userPrevMin = _userXMin;
-        //                                userPrevMax = _userXMax;
-        //                            }
-        //                            // try to read current plot limits (may be useful when not user-zoomed)
-        //                            try { prevAxisMin = plt.Axes.Bottom.Min; } catch { prevAxisMin = null; }
-        //                            try { prevAxisMax = plt.Axes.Bottom.Max; } catch { prevAxisMax = null; }
-        //                            try { prevYMin = plt.Axes.Left.Min; } catch { prevYMin = null; }
-        //                            try { prevYMax = plt.Axes.Left.Max; } catch { prevYMax = null; }
-        //                        }
-        //                        catch { }
-        //                        // clear the plot for re-render
-        //                        plt.Clear();
-
-        //                        // ScottPlot expects double[] Xs in OADate for DateTime axis. Use Add.Scatter which accepts Xs and Ys.
-        //                        var scatterAvg = plt.Add.Scatter(xs, ysAvg);
-        //                        var scatterToday = plt.Add.Scatter(xs, ysToday);
-        //                        try
-        //                        {
-        //                            var lw = scatterAvg.GetType().GetProperty("LineWidth"); if (lw != null && lw.CanWrite) lw.SetValue(scatterAvg, Convert.ChangeType(1.5, lw.PropertyType));
-        //                            var ms = scatterAvg.GetType().GetProperty("MarkerSize"); if (ms != null && ms.CanWrite) ms.SetValue(scatterAvg, Convert.ChangeType(6.0, ms.PropertyType));
-        //                            var mshape = scatterAvg.GetType().GetProperty("MarkerShape") ?? scatterAvg.GetType().GetProperty("Marker");
-        //                            if (mshape != null && mshape.CanWrite)
-        //                            {
-        //                                try
-        //                                {
-        //                                    var t = mshape.PropertyType;
-        //                                    if (t.IsEnum)
-        //                                    {
-        //                                        var names = Enum.GetNames(t);
-        //                                        var prefer = names.FirstOrDefault(nm => nm.IndexOf("Circle", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                    ?? names.FirstOrDefault(nm => nm.IndexOf("Dot", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                    ?? names.FirstOrDefault();
-        //                                        if (!string.IsNullOrEmpty(prefer))
-        //                                        {
-        //                                            var val = Enum.Parse(t, prefer);
-        //                                            mshape.SetValue(scatterAvg, val);
-        //                                        }
-        //                                    }
-        //                                }
-        //                                catch { }
-        //                            }
-
-        //                            // set color to blue if supported
-        //                            try
-        //                            {
-        //                                var propColor = scatterAvg.GetType().GetProperty("Color");
-        //                                if (propColor != null && propColor.CanWrite)
-        //                                {
-        //                                    var pt = propColor.PropertyType;
-        //                                    if (pt == typeof(System.Drawing.Color))
-        //                                        propColor.SetValue(scatterAvg, System.Drawing.Color.DodgerBlue);
-        //                                }
-        //                            }
-        //                            catch { }
-        //                        }
-        //                        catch { }
-
-        //                        // style second series (today) in a different color
-        //                        try
-        //                        {
-        //                            var propColorT = scatterToday.GetType().GetProperty("Color");
-        //                            if (propColorT != null && propColorT.CanWrite)
-        //                            {
-        //                                var pt = propColorT.PropertyType;
-        //                                if (pt == typeof(System.Drawing.Color)) propColorT.SetValue(scatterToday, System.Drawing.Color.MediumSeaGreen);
-        //                            }
-        //                        }
-        //                        catch { }
-
-        //                        // format bottom axis as DateTime. Prefer a manual 15-minute tick generator when available
-        //                        try
-        //                        {
-        //                            plt.Axes.DateTimeTicksBottom();
-
-        //                            // attempt to prefer a DateTimeManual tick generator with 15-minute spacing (if ScottPlot version exposes it)
-        //                            try
-        //                            {
-        //                                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-        //                                Type manualType = null;
-        //                                foreach (var a in assemblies)
-        //                                {
-        //                                    try { manualType = a.GetType("ScottPlot.TickGenerators.DateTimeManual"); } catch { }
-        //                                    if (manualType != null) break;
-        //                                }
-
-        //                                object generator = null;
-        //                                if (manualType != null)
-        //                                {
-        //                                    // prefer ctor(TimeSpan) or ctor(double days)
-        //                                    var ct = manualType.GetConstructors().FirstOrDefault();
-        //                                    if (ct != null)
-        //                                    {
-        //                                        var pars = ct.GetParameters();
-        //                                        if (pars.Length == 1 && pars[0].ParameterType == typeof(TimeSpan))
-        //                                        {
-        //                                            generator = Activator.CreateInstance(manualType, TimeSpan.FromMinutes(15));
-        //                                        }
-        //                                        else if (pars.Length == 1 && pars[0].ParameterType == typeof(double))
-        //                                        {
-        //                                            // double often represents days in OADate units
-        //                                            generator = Activator.CreateInstance(manualType, TimeSpan.FromMinutes(15).TotalDays);
-        //                                        }
-        //                                        else
-        //                                        {
-        //                                            try { generator = Activator.CreateInstance(manualType); } catch { generator = null; }
-        //                                        }
-        //                                    }
-
-        //                                    if (generator != null)
-        //                                    {
-        //                                        // set a friendly label formatter when supported
-        //                                        try
-        //                                        {
-        //                                            var lfProp = manualType.GetProperty("LabelFormatter");
-        //                                            if (lfProp != null && lfProp.CanWrite && lfProp.PropertyType == typeof(Func<DateTime, string>))
-        //                                            {
-        //                                                lfProp.SetValue(generator, new Func<DateTime, string>(d => d.ToString("dd.MM HH:mm")));
-        //                                            }
-        //                                        }
-        //                                        catch { }
-
-        //                                        try
-        //                                        {
-        //                                            var bottom = plt.Axes.Bottom;
-        //                                            var prop = bottom.GetType().GetProperty("TickGenerator");
-        //                                            if (prop != null && prop.CanWrite)
-        //                                                prop.SetValue(bottom, generator);
-        //                                        }
-        //                                        catch { }
-        //                                    }
-        //                                }
-
-        //                                // fallback: if we couldn't create a manual generator, use the automatic one with a formatter
-        //                                if (manualType == null || plt.Axes.Bottom.TickGenerator == null)
-        //                                {
-        //                                    try
-        //                                    {
-        //                                        plt.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.DateTimeAutomatic()
-        //                                        {
-        //                                            LabelFormatter = (DateTime date) =>
-        //                                            {
-        //                                                try { return date.ToString("dd.MM HH:mm"); } catch { return date.ToString(); }
-        //                                            }
-        //                                        };
-        //                                    }
-        //                                    catch { }
-        //                                }
-        //                            }
-        //                            catch { }
-        //                        }
-        //                        catch { }
-        //                        try { plt.YLabel("Gesamtwert"); } catch { }
-
-        //                        // ensure X limits fit data so DateTime ticks render correctly
-        //                        try
-        //                        {
-        //                            if (xs.Length > 0)
-        //                            {
-        //                                // compute data bounds in OADate
-        //                                double dataMin = xs.Min();
-        //                                double dataMax = xs.Max();
-
-        //                                // determine base previous limits: prefer user's previous limits when they zoomed
-        //                                // otherwise use the axis limits captured before clearing (prevAxisMin/prevAxisMax)
-        //                                // Treat the very first render specially: if we have not initialized the plot yet,
-        //                                // force prevMin/prevMax to null so the "no previous limits" branch executes and
-        //                                // the initial 5-minute window is applied.
-        //                                double? prevMin = null, prevMax = null;
-        //                                try
-        //                                {
-        //                                    if (!_plotInitialized)
-        //                                    {
-        //                                        prevMin = null;
-        //                                        prevMax = null;
-        //                                    }
-        //                                    else if (_plotUserZoomed && userPrevMin.HasValue && userPrevMax.HasValue)
-        //                                    {
-        //                                        prevMin = userPrevMin;
-        //                                        prevMax = userPrevMax;
-        //                                    }
-        //                                    else
-        //                                    {
-        //                                        prevMin = prevAxisMin ?? plt.Axes.Bottom.Min;
-        //                                        prevMax = prevAxisMax ?? plt.Axes.Bottom.Max;
-        //                                    }
-        //                                }
-        //                                catch { }
-
-        //                                // debug: log incoming and previous bounds
-        //                                try
-        //                                {
-        //                                    System.Diagnostics.Debug.WriteLine($"TVH: dataMax={dataMax} prevMin={prevMin} prevMax={prevMax} _userXMin={_userXMin} _userXMax={_userXMax} _plotUserZoomed={_plotUserZoomed}");
-        //                                }
-        //                                catch { }
-
-        //                                double chosenMin = double.NaN, chosenMax = double.NaN;
-
-        //                                if (prevMin.HasValue && prevMax.HasValue && !double.IsNaN(prevMin.Value) && !double.IsNaN(prevMax.Value) && prevMax.Value > prevMin.Value)
-        //                                {
-        //                                    // keep current width to preserve zoom
-
-        //                                    // if new data extends into the rightmost 5% of the previous window, slide the window so the newest data is visible
-        //                                    var prevWidth = prevMax.Value - prevMin.Value;
-        //                                    if (prevWidth > 0 && dataMax > prevMax.Value - 0.05 * prevWidth)
-        //                                    {
-        //                                        // keep the previous window width (prevWidth)
-        //                                        // set new right edge to latest data time + 5% of the window width,
-        //                                        // then compute left edge as right - prevWidth.
-        //                                        var shift = 0.05 * prevWidth;
-        //                                        chosenMax = dataMax + shift; // extend slightly beyond newest point
-        //                                        chosenMin = chosenMax - prevWidth;
-
-        //                                        // don't go before earliest data
-        //                                        if (chosenMin < dataMin)
-        //                                        {
-        //                                            chosenMin = dataMin;
-        //                                            chosenMax = chosenMin + prevWidth;
-        //                                        }
-        //                                    }
-        //                                    else
-        //                                    {
-        //                                        // preserve current view entirely
-        //                                        chosenMin = prevMin.Value;
-        //                                        chosenMax = prevMax.Value;
-        //                                    }
-        //                                }
-        //                                else
-        //                                {
-        //                                    // no previous limits -> default view: show a 5-minute window ending slightly after the
-        //                                    // newest data point so the last timestamp sits ~5% from the right edge.
-        //                                    try
-        //                                    {
-        //                                        // target window length in days (5 minutes)
-        //                                        double spanDays = TimeSpan.FromMinutes(5).TotalDays;
-        //                                        // place right edge slightly after newest data point (5% of window)
-        //                                        chosenMax = dataMax + 0.05 * spanDays;
-        //                                        chosenMin = chosenMax - spanDays;
-
-        //                                        // don't go before earliest data
-        //                                        if (chosenMin < dataMin)
-        //                                        {
-        //                                            chosenMin = dataMin;
-        //                                            chosenMax = chosenMin + spanDays;
-        //                                        }
-        //                                    }
-        //                                    catch
-        //                                    {
-        //                                        // fallback: last 5 minutes relative to now
-        //                                        var now = DateTime.Now;
-        //                                        var start = now.AddMinutes(-5);
-        //                                        chosenMin = start.ToOADate();
-        //                                        chosenMax = now.ToOADate();
-        //                                    }
-        //                                }
-
-        //                                // cache times and rowids for interaction handlers
-        //                                try
-        //                                {
-        //                                    _totalValueTimes = xs.Select(o => DateTime.FromOADate(o)).ToList();
-        //                                    if (_totalValueTimes.Count > 2) _totalValueMedianDeltaDays = (_totalValueTimes.Last() - _totalValueTimes.First()).TotalDays / (_totalValueTimes.Count - 1);
-        //                                    // ensure rowid list matches times count
-        //                                    if (_totalValueRowIds == null) _totalValueRowIds = new List<long?>();
-        //                                    if (_totalValueRowIds.Count != _totalValueTimes.Count)
-        //                                    {
-        //                                        var newIds = new List<long?>();
-        //                                        for (int i = 0; i < _totalValueTimes.Count; i++) newIds.Add(i < _totalValueRowIds.Count ? _totalValueRowIds[i] : null);
-        //                                        _totalValueRowIds = newIds;
-        //                                    }
-        //                                }
-        //                                catch { }
-
-        //                                // autoscale Y only when automatic shifting/auto-mode is enabled.
-        //                                // Respect the user's checkbox: when automatic shifting/autoscale is disabled, do not modify Y limits.
-        //                                try
-        //                                {
-        //                                    bool autoEnabledForAxes = false;
-        //                                    try { autoEnabledForAxes = ((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true; } catch { }
-
-        //                                    if (!autoEnabledForAxes)
-        //                                    {
-        //                                        // User disabled automatic shifting/autoscale -> restore previous Y limits (if available)
-        //                                        try
-        //                                        {
-        //                                            if (prevYMin.HasValue && prevYMax.HasValue && prevYMax.Value > prevYMin.Value)
-        //                                            {
-        //                                                plt.Axes.SetLimitsY(prevYMin.Value, prevYMax.Value);
-        //                                            }
-        //                                        }
-        //                                        catch { }
-        //                                    }
-        //                                    else
-        //                                    {
-        //                                        if (!_plotUserZoomed)
-        //                                        {
-        //                                            // Autoscale Y using only the data points that fall inside the active X range.
-        //                                            try
-        //                                            {
-        //                                                // determine X range (OADate) to consider for Y autoscale
-        //                                                double xMin = double.NaN, xMax = double.NaN;
-        //                                                try
-        //                                                {
-        //                                                    if (_plotUserZoomed && _userXMin.HasValue && _userXMax.HasValue)
-        //                                                    {
-        //                                                        xMin = _userXMin.Value; xMax = _userXMax.Value;
-        //                                                    }
-        //                                                    else if (!double.IsNaN(chosenMin) && !double.IsNaN(chosenMax))
-        //                                                    {
-        //                                                        xMin = chosenMin; xMax = chosenMax;
-        //                                                    }
-        //                                                    else if (prevAxisMin.HasValue && prevAxisMax.HasValue)
-        //                                                    {
-        //                                                        xMin = prevAxisMin.Value; xMax = prevAxisMax.Value;
-        //                                                    }
-        //                                                }
-        //                                                catch { }
-
-        //                                                // If no valid X-range deduced, use full data range
-        //                                                if (double.IsNaN(xMin) || double.IsNaN(xMax) || xMin >= xMax)
-        //                                                {
-        //                                                    try { xMin = xs.Min(); xMax = xs.Max(); } catch { }
-        //                                                }
-
-        //                                                double minY = double.PositiveInfinity;
-        //                                                double maxY = double.NegativeInfinity;
-
-        //                                                if (xs != null && xs.Length > 0)
-        //                                                {
-        //                                                    for (int i = 0; i < xs.Length; i++)
-        //                                                    {
-        //                                                        try
-        //                                                        {
-        //                                                            var x = xs[i];
-        //                                                            if (x < xMin || x > xMax) continue;
-        //                                                            if (ysAvg != null && i < ysAvg.Length)
-        //                                                            {
-        //                                                                var v = ysAvg[i];
-        //                                                                if (!double.IsNaN(v) && !double.IsInfinity(v)) { minY = Math.Min(minY, v); maxY = Math.Max(maxY, v); }
-        //                                                            }
-        //                                                            if (ysToday != null && i < ysToday.Length)
-        //                                                            {
-        //                                                                var v2 = ysToday[i];
-        //                                                                if (!double.IsNaN(v2) && !double.IsInfinity(v2)) { minY = Math.Min(minY, v2); maxY = Math.Max(maxY, v2); }
-        //                                                            }
-        //                                                        }
-        //                                                        catch { }
-        //                                                    }
-        //                                                }
-
-        //                                                if (!(double.IsInfinity(minY) || double.IsInfinity(maxY)))
-        //                                                {
-        //                                                    var range = Math.Max(1e-9, maxY - minY);
-        //                                                    var pad = range * 0.05;
-        //                                                    try { plt.Axes.SetLimitsY(minY - pad, maxY + pad); } catch { }
-        //                                                }
-        //                                                else
-        //                                                {
-        //                                                    // fallback to autoscale on full data set
-        //                                                    try { plt.Axes.AutoScale(); } catch { }
-        //                                                }
-        //                                            }
-        //                                            catch
-        //                                            {
-        //                                                try { plt.Axes.AutoScale(); } catch { }
-        //                                            }
-        //                                        }
-        //                                        else
-        //                                        {
-        //                                            // user has zoomed: preserve their Y limits (do not autoscale)
-        //                                            try
-        //                                            {
-        //                                                if (prevYMin.HasValue && prevYMax.HasValue && prevYMax.Value > prevYMin.Value)
-        //                                                {
-        //                                                    try { plt.Axes.SetLimitsY(prevYMin.Value, prevYMax.Value); } catch { }
-        //                                                }
-        //                                            }
-        //                                            catch { }
-        //                                        }
-        //                                    }
-        //                                }
-        //                                catch { }
-
-        //                                try { if (!double.IsNaN(chosenMin) && !double.IsNaN(chosenMax)) plt.Axes.SetLimitsX(chosenMin, chosenMax); } catch { }
-
-        //                                // do NOT overwrite the user's explicit X limits when adjusting the view programmatically.
-        //                                // Keep _userXMin/_userXMax set only by direct user interactions (mouse wheel),
-        //                                // so the user's zoom remains preserved across renders / hot-reload.
-
-        //                                // remember chosen limits for later reapply
-        //                                try
-        //                                {
-        //                                    // check UI toggle: only enable automatic X-shift when checkbox is checked
-        //                                    bool autoShiftEnabledLocal = false;
-        //                                    try { autoShiftEnabledLocal = ((this.FindName("ChkAutoShiftX") as CheckBox)?.IsChecked) == true; } catch { }
-
-        //                                    // only treat computedChosen as a "shift" candidate when we actually moved the window
-        //                                    bool computedShift = false;
-        //                                    try
-        //                                    {
-        //                                        if (prevMin.HasValue && prevMax.HasValue && prevMax.Value > prevMin.Value)
-        //                                        {
-        //                                            var prevWidth = prevMax.Value - prevMin.Value;
-        //                                            if (prevWidth > 0 && dataMax > prevMax.Value - 0.05 * prevWidth)
-        //                                                computedShift = true;
-        //                                        }
-        //                                    }
-        //                                    catch { }
-
-        //                                    if (computedShift && autoShiftEnabledLocal)
-        //                                    {
-        //                                        computedChosenMin = double.IsNaN(chosenMin) ? null : (double?)chosenMin;
-        //                                        computedChosenMax = double.IsNaN(chosenMax) ? null : (double?)chosenMax;
-        //                                    }
-        //                                    else
-        //                                    {
-        //                                        // If there were no previous axis limits (first load) and auto-shift is enabled,
-        //                                        // apply the freshly computed chosen limits so the initial view shows the last 5 minutes.
-        //                                        try
-        //                                        {
-        //                                            if ((!prevMin.HasValue || !prevMax.HasValue) && autoShiftEnabledLocal)
-        //                                            {
-        //                                                computedChosenMin = double.IsNaN(chosenMin) ? null : (double?)chosenMin;
-        //                                                computedChosenMax = double.IsNaN(chosenMax) ? null : (double?)chosenMax;
-        //                                            }
-        //                                            else
-        //                                            {
-        //                                                // no shift requested or auto-shift disabled -> don't propose computed shift
-        //                                                computedChosenMin = null;
-        //                                                computedChosenMax = null;
-        //                                            }
-        //                                        }
-        //                                        catch
-        //                                        {
-        //                                            computedChosenMin = null;
-        //                                            computedChosenMax = null;
-        //                                        }
-        //                                    }
-        //                                }
-        //                                catch { }
-        //                                // debug: log chosen limits
-        //                                try { System.Diagnostics.Debug.WriteLine($"TVH: chosenMin={chosenMin} chosenMax={chosenMax}"); } catch { }
-        //                            }
-        //                        }
-        //                        catch { }
-
-        //                        // no further autoscale here; X limits are reapplied below when appropriate
-
-        //                        // set labels on series and show legend
-        //                        try
-        //                        {
-        //                            var setLabel = new Action<object, string>((pl, lbl) =>
-        //                            {
-        //                                try
-        //                                {
-        //                                    var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
-        //                                    if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, lbl);
-        //                                    else
-        //                                    {
-        //                                        var mi = pl.GetType().GetMethod("SetLabel") ?? pl.GetType().GetMethod("SetLegend");
-        //                                        if (mi != null) mi.Invoke(pl, new object[] { lbl });
-        //                                    }
-        //                                }
-        //                                catch { }
-        //                            });
-        //                            try { setLabel(scatterAvg, "Ø Gesamtwert"); } catch { }
-        //                            try { setLabel(scatterToday, "Gesamtwert"); } catch { }
-        //                            try
-        //                            {
-        //                                // show legend and try to position it in the bottom-left corner
-        //                                plt.Legend.IsVisible = true;
-
-        //                                try
-        //                                {
-        //                                    var legendObj = plt.Legend;
-        //                                    if (legendObj != null)
-        //                                    {
-        //                                        var lt = legendObj.GetType();
-        //                                        // try common property names first
-        //                                        var prop = lt.GetProperty("Location") ?? lt.GetProperty("LegendLocation") ?? lt.GetProperty("Position") ?? lt.GetProperty("Anchor");
-        //                                        if (prop != null && prop.CanWrite && prop.PropertyType.IsEnum)
-        //                                        {
-        //                                            var names = Enum.GetNames(prop.PropertyType);
-        //                                            var prefer = names.FirstOrDefault(n => n.IndexOf("LowerLeft", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                         ?? names.FirstOrDefault(n => n.IndexOf("BottomLeft", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                         ?? names.FirstOrDefault(n => n.IndexOf("SouthWest", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                         ?? names.FirstOrDefault();
-        //                                            if (!string.IsNullOrEmpty(prefer))
-        //                                            {
-        //                                                prop.SetValue(legendObj, Enum.Parse(prop.PropertyType, prefer));
-        //                                            }
-        //                                        }
-        //                                        else
-        //                                        {
-        //                                            // try common setter method names that accept an enum
-        //                                            var methods = new[] { "SetLocation", "SetPosition", "SetLegendLocation", "SetAnchor" };
-        //                                            foreach (var mname in methods)
-        //                                            {
-        //                                                var mi = lt.GetMethod(mname);
-        //                                                if (mi != null)
-        //                                                {
-        //                                                    var p = mi.GetParameters().FirstOrDefault();
-        //                                                    if (p != null && p.ParameterType.IsEnum)
-        //                                                    {
-        //                                                        var names = Enum.GetNames(p.ParameterType);
-        //                                                        var prefer = names.FirstOrDefault(n => n.IndexOf("LowerLeft", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                                     ?? names.FirstOrDefault(n => n.IndexOf("BottomLeft", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                                     ?? names.FirstOrDefault(n => n.IndexOf("SouthWest", StringComparison.OrdinalIgnoreCase) >= 0)
-        //                                                                     ?? names.FirstOrDefault();
-        //                                                        if (!string.IsNullOrEmpty(prefer))
-        //                                                        {
-        //                                                            mi.Invoke(legendObj, new object[] { Enum.Parse(p.ParameterType, prefer) });
-        //                                                            break;
-        //                                                        }
-        //                                                    }
-        //                                                }
-        //                                            }
-        //                                        }
-        //                                    }
-        //                                }
-        //                                catch { }
-        //                            }
-        //                            catch { }
-        //                        }
-        //                        catch { }
-
-        //                        // Reapply final X limits. Prefer user-set limits when user zoomed, but if a computed shift
-        //                        // was determined (computedChosenMin/Max != null) apply that shift and update the stored
-        //                        // user limits so the shifted window becomes the new preserved view.
-        //                        try
-        //                        {
-        //                            double? applyMin = null, applyMax = null;
-        //                            bool appliedShift = false;
-
-        //                            // If the user explicitly selected a fixed interval via the checkboxes,
-        //                            // prefer that and force-apply the corresponding X limits so the
-        //                            // selection is not overwritten by automatic/view heuristics.
-        //                            try
-        //                            {
-        //                                if (_forcedIntervalUserSet && _forcedInterval.HasValue && _totalValueTimes != null && _totalValueTimes.Count > 0)
-        //                                {
-        //                                    // compute forced window anchored near the latest data point
-        //                                    var dataMaxOa = _totalValueTimes.Last().ToOADate();
-        //                                    var spanDays = _forcedInterval.Value.TotalDays;
-        //                                    var chosenMaxF = dataMaxOa + 0.05 * spanDays;
-        //                                    var chosenMinF = chosenMaxF - spanDays;
-        //                                    var dataMinOa = _totalValueTimes.First().ToOADate();
-        //                                    if (chosenMinF < dataMinOa)
-        //                                    {
-        //                                        chosenMinF = dataMinOa;
-        //                                        chosenMaxF = chosenMinF + spanDays;
-        //                                    }
-        //                                    applyMin = chosenMinF;
-        //                                    applyMax = chosenMaxF;
-        //                                    // ensure we also set tick generator for the selected interval
-        //                                    try { ApplyXAxisInterval(_forcedInterval); } catch { }
-        //                                    appliedShift = true;
-        //                                }
-        //                            }
-        //                            catch { }
-
-        //                            if (!appliedShift)
-        //                            {
-        //                                if (_plotUserZoomed)
-        //                                {
-        //                                    // if a computed shift was prepared (new data near right edge), prefer that and
-        //                                    // update stored user limits so the shifted window is preserved
-        //                                    if (computedChosenMin.HasValue && computedChosenMax.HasValue)
-        //                                    {
-        //                                        applyMin = computedChosenMin;
-        //                                        applyMax = computedChosenMax;
-        //                                        try { _userXMin = applyMin; _userXMax = applyMax; } catch { }
-        //                                        appliedShift = true;
-        //                                    }
-        //                                    else
-        //                                    {
-        //                                        applyMin = _userXMin ?? userPrevMin;
-        //                                        applyMax = _userXMax ?? userPrevMax;
-        //                                    }
-        //                                }
-        //                                else
-        //                                {
-        //                                    // use computed chosen limits if available, otherwise fall back to previous axis
-        //                                    applyMin = computedChosenMin ?? prevAxisMin ?? (double?)null;
-        //                                    applyMax = computedChosenMax ?? prevAxisMax ?? (double?)null;
-        //                                }
-        //                            }
-
-        //                            try { System.Diagnostics.Debug.WriteLine($"TVH: applying final X limits applyMin={applyMin} applyMax={applyMax} _plotUserZoomed={_plotUserZoomed} appliedShift={appliedShift}"); } catch { }
-
-        //                            if (applyMin.HasValue && applyMax.HasValue && !double.IsNaN(applyMin.Value) && !double.IsNaN(applyMax.Value) && applyMax.Value > applyMin.Value)
-        //                            {
-        //                                try { plt.Axes.SetLimitsX(applyMin.Value, applyMax.Value); } catch (Exception ex) { try { System.Diagnostics.Debug.WriteLine("TVH: SetLimitsX failed: " + ex.Message); } catch { } }
-        //                                // log actual axis values after setting to detect overwrites
-        //                                try { System.Diagnostics.Debug.WriteLine($"TVH: after SetLimitsX actualMin={plt.Axes.Bottom.Min} actualMax={plt.Axes.Bottom.Max}"); } catch { }
-        //                            }
-        //                        }
-        //                        catch { }
-
-        //                        // redraw
-        //                        try { PlotTotalValueHistory.Refresh(); } catch { }
-
-        //                        // Defensive reapply: some ScottPlot versions may reset axis after Refresh;
-        //                        // reapply user X limits once more and refresh to ensure right edge is preserved.
-        //                        try
-        //                        {
-        //                            double? finalMin = _userXMin ?? userPrevMin;
-        //                            double? finalMax = _userXMax ?? userPrevMax;
-        //                            if (finalMin.HasValue && finalMax.HasValue && finalMax.Value > finalMin.Value)
-        //                            {
-        //                                try { plt.Axes.SetLimitsX(finalMin.Value, finalMax.Value); } catch { }
-        //                                try { PlotTotalValueHistory.Refresh(); } catch { }
-        //                            }
-        //                        }
-        //                        catch { }
-        //                        // Schedule repeated deferred reapply attempts to work around Hot Reload / ScottPlot race conditions.
-        //                        try
-        //                        {
-        //                            double? deferredMin = _userXMin ?? userPrevMin;
-        //                            double? deferredMax = _userXMax ?? userPrevMax;
-        //                            if (deferredMin.HasValue && deferredMax.HasValue && deferredMax.Value > deferredMin.Value)
-        //                            {
-        //                                // apply immediately once (best-effort)
-        //                                try { plt.Axes.SetLimitsX(deferredMin.Value, deferredMax.Value); PlotTotalValueHistory.Refresh(); } catch { }
-
-        //                                // then schedule a few repeated reapply attempts at increasing intervals
-        //                                var reapplyTimer = new DispatcherTimer();
-        //                                int attempts = 0;
-        //                                // double the number of checks and use a smaller base interval so updates occur sooner
-        //                                reapplyTimer.Interval = TimeSpan.FromMilliseconds(100);
-        //                                reapplyTimer.Tick += (ts, te) =>
-        //                                {
-        //                                    try
-        //                                    {
-        //                                        attempts++;
-        //                                        plt.Axes.SetLimitsX(deferredMin.Value, deferredMax.Value);
-        //                                        PlotTotalValueHistory.Refresh();
-        //                                    }
-        //                                    catch { }
-        //                                    try
-        //                                    {
-        //                                        // previously stopped at 3 attempts; double to 6
-        //                                        if (attempts >= 6) reapplyTimer.Stop();
-        //                                        else reapplyTimer.Interval = TimeSpan.FromMilliseconds(100 * (attempts + 1));
-        //                                    }
-        //                                    catch { }
-        //                                };
-        //                                reapplyTimer.Start();
-        //                            }
-        //                        }
-        //                        catch { }
-        //                        try { Mouse.OverrideCursor = null; } catch { }
-        //                        try { _plotInitialized = true; } catch { }
-        //                    }
-        //                    catch { }
-        //                }), DispatcherPriority.Background);
-        //            }
-        //            catch { }
-        //        });
-
-        //    }
-        //    catch { }
-        //}
+      
 
         // Read the filename of the currently active CSV (Active = 1) from NEW_CSV_ACTIVE
         private string GetActiveCsvFromDb(string dbPath)
@@ -3327,7 +2930,7 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
             if (s.Contains(";") || s.Contains('"') || s.Contains('\n'))
                 return '"' + s.Replace("\"", "\"\"") + '"';
             return s;
-        }       
+        }
 
         private void SaveLastHoldings()
         {
@@ -3443,7 +3046,7 @@ VALUES ($isin, $name, $shares, $avg, $purchase, $percent, $total, $today, $provi
                 }
             }
             catch { }
-        }       
+        }
 
         private void BtnOpenCsv_Click(object sender, RoutedEventArgs e)
         {
