@@ -1793,13 +1793,286 @@ namespace TradeMVVM.ReadHoldings
                 }
                 catch { }
                 //TODO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                 // render into Tops, All and Bottoms plots with titles (use FindName to avoid relying on generated fields)
                 try
                 {
-                    var pt = this.FindName("PlotTops") as ScottPlot.WPF.WpfPlot;
-                    if (pt != null) RenderCopyPlot(pt, xsDup, ysDup, "", currentXMin, currentXMax, finalYMin, finalYMax);
+                    var pt = this.FindName("Tops") as ScottPlot.WPF.WpfPlot;
+                    if (pt != null)
+                    {
+
+                        pt.Plot.Title("Tops");
+                        pt.Refresh();
+                        try
+                        {
+                            // compute top 4 increases over current X window
+                            var isinNamesMap = LoadIsinNames();
+                            var changeSeries = LoadNewChangesByIsin();
+
+                            var perIsin = new List<(string Isin, string Name, double Delta, List<(DateTime t, double v)> Points)>();
+                            foreach (var kv in changeSeries)
+                            {
+                                try
+                                {
+                                    var isin = kv.Key;
+                                    var all = kv.Value.Select(p => (t: p.Item1, v: p.Item2)).OrderBy(p => p.t).ToList();
+                                    if (all.Count < 2) continue;
+                                    // restrict to window
+                                    var window = all.Where(p => p.t.ToOADate() >= currentXMin && p.t.ToOADate() <= currentXMax).ToList();
+                                    if (window.Count < 2) continue;
+                                    var first = window.First().v;
+                                    var last = window.Last().v;
+                                    var delta = last - first;
+                                    var name = isinNamesMap.TryGetValue(isin, out var n) && !string.IsNullOrWhiteSpace(n) ? n : isin;
+                                    perIsin.Add((isin, name, delta, window));
+                                }
+                                catch { }
+                            }
+
+                            var topInc = perIsin.OrderByDescending(x => x.Delta).Take(4).ToList();
+                            //var topDec = perIsin.OrderBy(x => x.Delta).Take(4).ToList();
+
+                            var pltTop = pt.Plot;
+                            pltTop.Clear();
+
+                            // plot top increases (label prefixed with "+")
+                            foreach (var item in topInc)
+                            {
+                                try
+                                {
+                                    var xsTop = item.Points.Select(p => p.t.ToOADate()).ToArray();
+                                    var ysTop = item.Points.Select(p => p.v).ToArray();
+                                    var s = pltTop.Add.Scatter(xsTop, ysTop);
+                                   
+                                }
+                                catch { }
+                            }
+
+                       
+                            try { pltTop.Axes.DateTimeTicksBottom(); } catch { }
+                            try { pltTop.Legend.IsVisible = true; } catch { }
+                            pt.Refresh();
+
+                            // Also populate left-area 3 with a tidy list of top increases
+                            try
+                            {
+                                var lb = this.FindName("LstLeftArea3") as System.Windows.Controls.ListBox
+                                         ?? this.FindName("LstLeft3") as System.Windows.Controls.ListBox
+                                         ?? this.FindName("LstLinksArea3") as System.Windows.Controls.ListBox
+                                         ?? this.FindName("LstRightArea3") as System.Windows.Controls.ListBox;
+
+                                if (lb != null)
+                                {
+                                    lb.Items.Clear();
+                                    int rank = 1;
+                                    foreach (var item in topInc)
+                                    {
+                                        try
+                                        {
+                                            var panel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+                                            var tbName = new System.Windows.Controls.TextBlock
+                                            {
+                                                Text = $"{rank}. {item.Name}",
+                                                FontWeight = System.Windows.FontWeights.SemiBold,
+                                                Margin = new System.Windows.Thickness(2, 0, 8, 0)
+                                            };
+
+                                            var tbDelta = new System.Windows.Controls.TextBlock
+                                            {
+                                                Text = $"{item.Delta:+0.00;-0.00;0.00} %",
+                                                Foreground = item.Delta >= 0 ? System.Windows.Media.Brushes.Green : System.Windows.Media.Brushes.Red,
+                                                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                                                Margin = new System.Windows.Thickness(0, 0, 4, 0)
+                                            };
+
+                                            panel.Children.Add(tbName);
+                                            panel.Children.Add(tbDelta);
+
+                                            // optional small subtitle with first/last values
+                                            try
+                                            {
+                                                var first = item.Points.First();
+                                                var last = item.Points.Last();
+                                                var tbSub = new System.Windows.Controls.TextBlock
+                                                {
+                                                    Text = $"  ({first.t:HH:mm} → {last.t:HH:mm}) {first.v:+0.00;-0.00;0.00}% → {last.v:+0.00;-0.00;0.00}%",
+                                                    Foreground = System.Windows.Media.Brushes.Gray,
+                                                    Margin = new System.Windows.Thickness(6, 0, 0, 0)
+                                                };
+                                                panel.Children.Add(tbSub);
+                                            }
+                                            catch { }
+
+                                            lb.Items.Add(new System.Windows.Controls.ListBoxItem { Content = panel });
+                                            rank++;
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        catch
+                        {
+                            // fallback to simple copy
+                            try { RenderCopyPlot(pt, xsDup, ysDup, "Tops", currentXMin, currentXMax, finalYMin, finalYMax); } catch { }
+                        }
+                    }
                 }
                 catch { }
+
+                try
+                {
+                    var pt = this.FindName("Flops") as ScottPlot.WPF.WpfPlot;
+                    if (pt != null)
+                    {
+                        pt.Plot.Title("Flops");
+                        pt.Refresh();
+                        try
+                        {
+                            // compute top 4 increases over current X window
+                            var isinNamesMap = LoadIsinNames();
+                            var changeSeries = LoadNewChangesByIsin();
+
+                            var perIsin = new List<(string Isin, string Name, double Delta, List<(DateTime t, double v)> Points)>();
+                            foreach (var kv in changeSeries)
+                            {
+                                try
+                                {
+                                    var isin = kv.Key;
+                                    var all = kv.Value.Select(p => (t: p.Item1, v: p.Item2)).OrderBy(p => p.t).ToList();
+                                    if (all.Count < 2) continue;
+                                    // restrict to window
+                                    var window = all.Where(p => p.t.ToOADate() >= currentXMin && p.t.ToOADate() <= currentXMax).ToList();
+                                    if (window.Count < 2) continue;
+                                    var first = window.First().v;
+                                    var last = window.Last().v;
+                                    var delta = last - first;
+                                    var name = isinNamesMap.TryGetValue(isin, out var n) && !string.IsNullOrWhiteSpace(n) ? n : isin;
+                                    perIsin.Add((isin, name, delta, window));
+                                }
+                                catch { }
+                            }
+
+                            //var topInc = perIsin.OrderByDescending(x => x.Delta).Take(4).ToList();
+                            var topDec = perIsin.OrderBy(x => x.Delta).Take(4).ToList();
+
+                            var pltTop = pt.Plot;
+                            pltTop.Clear();                          
+
+                            // plot top decreases (label prefixed with "-")
+                            foreach (var item in topDec)
+                            {
+                                try
+                                {
+                                    var xsTop = item.Points.Select(p => p.t.ToOADate()).ToArray();
+                                    var ysTop = item.Points.Select(p => p.v).ToArray();
+                                    var s = pltTop.Add.Scatter(xsTop, ysTop);
+                                   
+                                }
+                                catch { }
+                            }
+
+                            try { pltTop.Axes.DateTimeTicksBottom(); } catch { }
+                            try { pltTop.Legend.IsVisible = true; } catch { }
+                            pt.Refresh();
+
+                            // Also populate left-area 3 with a tidy list of top increases
+                            try
+                            {
+                                var lb = this.FindName("LstLeftArea4") as System.Windows.Controls.ListBox
+                                         ?? this.FindName("LstLeft3") as System.Windows.Controls.ListBox
+                                         ?? this.FindName("LstLinksArea3") as System.Windows.Controls.ListBox
+                                         ?? this.FindName("LstRightArea3") as System.Windows.Controls.ListBox;
+
+                                if (lb != null)
+                                {
+                                    lb.Items.Clear();
+                                    int rank = 1;
+                                    foreach (var item in topDec)
+                                    {
+                                        try
+                                        {
+                                            var panel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+                                            var tbName = new System.Windows.Controls.TextBlock
+                                            {
+                                                Text = $"{rank}. {item.Name}",
+                                                FontWeight = System.Windows.FontWeights.SemiBold,
+                                                Margin = new System.Windows.Thickness(2, 0, 8, 0)
+                                            };
+
+                                            var tbDelta = new System.Windows.Controls.TextBlock
+                                            {
+                                                Text = $"{item.Delta:+0.00;-0.00;0.00} %",
+                                                Foreground = item.Delta >= 0 ? System.Windows.Media.Brushes.Green : System.Windows.Media.Brushes.Red,
+                                                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                                                Margin = new System.Windows.Thickness(0, 0, 4, 0)
+                                            };
+
+                                            panel.Children.Add(tbName);
+                                            panel.Children.Add(tbDelta);
+
+                                            // optional small subtitle with first/last values
+                                            try
+                                            {
+                                                var first = item.Points.First();
+                                                var last = item.Points.Last();
+                                                var tbSub = new System.Windows.Controls.TextBlock
+                                                {
+                                                    Text = $"  ({first.t:HH:mm} → {last.t:HH:mm}) {first.v:+0.00;-0.00;0.00}% → {last.v:+0.00;-0.00;0.00}%",
+                                                    Foreground = System.Windows.Media.Brushes.Gray,
+                                                    Margin = new System.Windows.Thickness(6, 0, 0, 0)
+                                                };
+                                                panel.Children.Add(tbSub);
+                                            }
+                                            catch { }
+
+                                            lb.Items.Add(new System.Windows.Controls.ListBoxItem { Content = panel });
+                                            rank++;
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+                            catch { }
+
+
+
+
+                        }
+                        catch
+                        {
+                            // fallback to simple copy
+                            try { RenderCopyPlot(pt, xsDup, ysDup, "Flops", currentXMin, currentXMax, finalYMin, finalYMax); } catch { }                       
+                        }
+                    }
+
+
+
+
+
+
+                }
+                catch { }
+
+
                 try
                 {
                     var pt = this.FindName("Plot") as ScottPlot.WPF.WpfPlot;
@@ -1856,12 +2129,12 @@ namespace TradeMVVM.ReadHoldings
 
                                         // add series
                                         var pl = pltTarget.Add.Scatter(xsSeries, ysSeries);
-                                        try
-                                        {
-                                            var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
-                                            if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, isin);
-                                        }
-                                        catch { }
+                                        //try
+                                        //{
+                                        //    var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
+                                        //    if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, isin);
+                                        //}
+                                        //catch { }
 
                                         // update global min/max
                                         for (int i = 0; i < ysSeries.Length; i++)
@@ -1912,12 +2185,7 @@ namespace TradeMVVM.ReadHoldings
                     }
                 }
                 catch { }
-                try
-                {
-                    var pb = this.FindName("PlotBottoms") as ScottPlot.WPF.WpfPlot;
-                    if (pb != null) RenderCopyPlot(pb, xsDup, ysDup, "Flops", currentXMin, currentXMax, finalYMin, finalYMax);
-                }
-                catch { }
+              
 
                 //---------------------------
 
@@ -1967,12 +2235,12 @@ namespace TradeMVVM.ReadHoldings
 
                                         // add series
                                         var pl = pltTarget.Add.Scatter(xsSeries, ysSeries);
-                                        try
-                                        {
-                                            var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
-                                            if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, isin);
-                                        }
-                                        catch { }
+                                        //try
+                                        //{
+                                        //    var prop = pl.GetType().GetProperty("Label") ?? pl.GetType().GetProperty("LegendText") ?? pl.GetType().GetProperty("LegendLabel");
+                                        //    if (prop != null && prop.CanWrite && prop.PropertyType == typeof(string)) prop.SetValue(pl, isin);
+                                        //}
+                                        //catch { }
 
                                         // update global min/max
                                         for (int i = 0; i < ysSeries.Length; i++)
@@ -2027,154 +2295,6 @@ namespace TradeMVVM.ReadHoldings
             catch { }
         }
 
-        private List<(DateTime time, double change)> LoadNewPricesPoints()
-        {
-            var list = new List<(DateTime time, double change)>();
-            try
-            {
-                var cs = new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString();
-                using var conn = new SqliteConnection(cs);
-                conn.Open();
-
-                // First try the common column names directly
-                try
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "SELECT Datum, Change FROM NEW_Prices ORDER BY Datum;";
-                    using var reader = cmd.ExecuteReader();
-                    if (reader != null)
-                    {
-                        while (reader.Read())
-                        {
-                            try
-                            {
-                                var datumObj = reader[0];
-                                DateTime time;
-                                if (datumObj is DateTime dt) time = dt;
-                                else
-                                {
-                                    var datumText = datumObj?.ToString();
-                                    if (!DateTime.TryParse(datumText, out time))
-                                        continue;
-                                }
-
-                                var changeObj = reader[1];
-                                if (changeObj == null || changeObj == DBNull.Value) continue;
-                                var changeText = changeObj.ToString();
-                                if (string.IsNullOrWhiteSpace(changeText)) continue;
-                                changeText = changeText.Replace("%", "").Trim();
-                                if (!double.TryParse(changeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double change))
-                                    continue;
-
-                                list.Add((time, change));
-                            }
-                            catch { }
-                        }
-                    }
-                }
-                catch
-                {
-                    // ignore - we'll try a flexible fallback below
-                }
-
-                // if we didn't get any points, try a flexible column-detection approach
-                if (list.Count == 0)
-                {
-                    try
-                    {
-                        // inspect columns
-                        var cols = new List<string>();
-                        using (var pragma = conn.CreateCommand())
-                        {
-                            pragma.CommandText = "PRAGMA table_info(NEW_Prices);";
-                            using var r = pragma.ExecuteReader();
-                            while (r.Read())
-                            {
-                                try { cols.Add(r.GetString(1)); } catch { }
-                            }
-                        }
-
-                        if (cols.Count > 0)
-                        {
-                            var timeCandidates = new[] { "LastUpdated", "Created", "Time", "Timestamp", "Datum", "Date", "ProviderTime" };
-                            var valueCandidates = new[] { "Change", "Percent", "Price", "Value", "LastPrice" };
-
-                            var timeCol = cols.FirstOrDefault(c => timeCandidates.Any(tc => string.Equals(c, tc, StringComparison.OrdinalIgnoreCase))) ?? cols.FirstOrDefault();
-                            var valueCol = cols.FirstOrDefault(c => valueCandidates.Any(vc => string.Equals(c, vc, StringComparison.OrdinalIgnoreCase)))
-                                           ?? cols.FirstOrDefault(c => c.IndexOf("price", StringComparison.OrdinalIgnoreCase) >= 0)
-                                           ?? cols.Skip(1).FirstOrDefault();
-
-                            if (!string.IsNullOrWhiteSpace(timeCol) && !string.IsNullOrWhiteSpace(valueCol))
-                            {
-                                using var cmd2 = conn.CreateCommand();
-                                cmd2.CommandText = $"SELECT \"{timeCol}\", \"{valueCol}\" FROM NEW_Prices ORDER BY \"{timeCol}\";";
-                                using var rdr = cmd2.ExecuteReader();
-                                while (rdr.Read())
-                                {
-                                    try
-                                    {
-                                        // parse time
-                                        DateTime? time = null;
-                                        var to = rdr.GetValue(0);
-                                        if (to is DateTime ddt) time = ddt;
-                                        else if (to is long l)
-                                        {
-                                            if (Math.Abs(l) > 1000000000000L) time = DateTimeOffset.FromUnixTimeMilliseconds(l).DateTime;
-                                            else if (Math.Abs(l) > 1000000000L) time = DateTimeOffset.FromUnixTimeSeconds(l).DateTime;
-                                            else time = DateTime.FromOADate(l);
-                                        }
-                                        else if (to is double db)
-                                        {
-                                            if (Math.Abs(db) > 1e12) time = DateTimeOffset.FromUnixTimeMilliseconds((long)db).DateTime;
-                                            else if (Math.Abs(db) > 1e9) time = DateTimeOffset.FromUnixTimeSeconds((long)db).DateTime;
-                                            else time = DateTime.FromOADate(db);
-                                        }
-                                        else
-                                        {
-                                            var s = to?.ToString();
-                                            if (!string.IsNullOrWhiteSpace(s))
-                                            {
-                                                if (!DateTime.TryParse(s, out var pd))
-                                                {
-                                                    // try parsing numeric string
-                                                    if (long.TryParse(s, out var lv))
-                                                    {
-                                                        if (Math.Abs(lv) > 1000000000000L) time = DateTimeOffset.FromUnixTimeMilliseconds(lv).DateTime;
-                                                        else if (Math.Abs(lv) > 1000000000L) time = DateTimeOffset.FromUnixTimeSeconds(lv).DateTime;
-                                                        else time = DateTime.FromOADate(lv);
-                                                    }
-                                                }
-                                                else time = pd;
-                                            }
-                                        }
-
-                                        if (!time.HasValue) continue;
-
-                                        // parse value
-                                        var vo = rdr.GetValue(1);
-                                        if (vo == null || vo == DBNull.Value) continue;
-                                        var vs = vo.ToString();
-                                        if (string.IsNullOrWhiteSpace(vs)) continue;
-                                        vs = vs.Replace("%", "").Trim();
-                                        if (!double.TryParse(vs, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double v)) continue;
-
-                                        list.Add((time.Value, v));
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                }
-
-                // ensure sorted
-                if (list.Count > 1) list = list.OrderBy(p => p.Item1).ToList();
-            }
-            catch { }
-
-            return list;
-        }
         // Simple helper to render a copy of the timeseries into another WpfPlot
         private void RenderCopyPlot(ScottPlot.WPF.WpfPlot target, double[] xs, double[] ys, string title, double? xMin = null, double? xMax = null, double? yMin = null, double? yMax = null)
         {
