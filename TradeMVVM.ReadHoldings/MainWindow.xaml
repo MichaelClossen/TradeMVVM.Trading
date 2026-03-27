@@ -6,7 +6,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:TradeMVVM.ReadHoldings"
         mc:Ignorable="d"
-        Title="MainWindow" Height="1200" Width="2000"   MinWidth="520">
+        Title="MainWindow" Height="1200" Width="2500"   MinWidth="520">
 
     <Grid>
         <Grid.ColumnDefinitions>
@@ -22,7 +22,9 @@
             <ColumnDefinition x:Name="ColMostRight" MinWidth="200" Width="450"/>
             <ColumnDefinition Width="8"/>
 
-            <ColumnDefinition x:Name="ColMostRight2" MinWidth="200" Width="*"/>
+            <ColumnDefinition x:Name="ColMostRight2" MinWidth="300" Width="*"/>
+
+            <ColumnDefinition x:Name="ColMostRight3" MinWidth="300" Width="*"/>
 
         </Grid.ColumnDefinitions>
         <!-- Left: controls above holdings table -->
@@ -296,7 +298,7 @@
             </Border>
             <Border Grid.Column="0" Grid.Row="4" Padding="6">
                 <StackPanel>
-                    <TextBlock Text="Top Gewinner" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,0" />
+                    <TextBlock Text="Tops" FontSize="15" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,0" />
                     <ListBox x:Name="LstLeftArea3" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch" />
                 </StackPanel>
             </Border>
@@ -314,7 +316,7 @@
 
             <Border Grid.Column="0" Grid.Row="10" Padding="6">
                 <StackPanel>
-                    <TextBlock Text="Top Flops" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                    <TextBlock Text="Flops" FontSize="15" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,6" />
                     <ListBox x:Name="LstLeftArea4" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch" />
                 </StackPanel>
             </Border>
@@ -327,25 +329,29 @@
                 <RowDefinition Height="*" />
 
             </Grid.RowDefinitions>
-            <!--<Border Grid.Column="0" Grid.Row="0" Background="White" Padding="6">
-                <StackPanel>
-                    <TextBlock Text="Top Gewinner" FontWeight="Bold" Foreground="#FF333333" HorizontalAlignment="Center" Margin="0,0,0,6" />
-                    <ListBox x:Name="LstLeftAreaXXX" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalAlignment="Stretch" />
-                </StackPanel>
-            </Border>-->
 
-            <Border Grid.Column="0" Grid.Row="0" Padding="6">
+            <Border Grid.Column="0" Grid.Row="0" Padding="6" Grid.RowSpan="3">
                 <!-- Plot for All -->
                 <ScottPlot:WpfPlot x:Name="Knockouts" Margin="6"/>
             </Border>
 
-            <Border Grid.Column="0" Grid.Row="2" Padding="6">
+       
+        </Grid>
+
+
+        <Grid  Grid.Column="7" >
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="8" />
+                <RowDefinition Height="*" />
+
+            </Grid.RowDefinitions>
+
+            <Border Grid.Column="0" Grid.Row="0" Padding="6" Grid.RowSpan="3">
                 <!-- Plot for Tops -->
                 <ScottPlot:WpfPlot x:Name="ETF" Margin="6"/>
             </Border>
         </Grid>
-
-
 
     </Grid>
 </Window>
