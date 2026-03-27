@@ -92,6 +92,11 @@ namespace TradeMVVM.ReadHoldings
         // store series points by display name (stable lookup for hover name)
         private System.Collections.Generic.Dictionary<string, (double[] Xs, double[] Ys)> _seriesPointsByName = new System.Collections.Generic.Dictionary<string, (double[] Xs, double[] Ys)>();
         private readonly object _seriesPointsByNameLock = new object();
+        // store raw point arrays per plottable object created by Add.Scatter for robust nearest-point lookup
+        private System.Collections.Generic.Dictionary<object, (double[] Xs, double[] Ys)> _plottablePointsByObject = new System.Collections.Generic.Dictionary<object, (double[] Xs, double[] Ys)>();
+        private readonly object _plottablePointsByObjectLock = new object();
+        // hover pixel distance threshold (only accept match if within this many pixels)
+        private const double HoverPixelThreshold = 8.0;
 
         public MainWindow()
         {
@@ -1165,6 +1170,31 @@ namespace TradeMVVM.ReadHoldings
                     }
                 }
                 catch { }
+                // prepare axis limits / pixel transform for consistent pixel-distance comparisons
+                double axXMin = double.NaN, axXMax = double.NaN, axYMin = double.NaN, axYMax = double.NaN;
+                bool haveAxes = false;
+                try
+                {
+                    var axes = plot.Plot.Axes;
+                    axXMin = axes.Bottom.Min; axXMax = axes.Bottom.Max;
+                    axYMin = axes.Left.Min; axYMax = axes.Left.Max;
+                    haveAxes = !(double.IsNaN(axXMin) || double.IsNaN(axXMax) || double.IsNaN(axYMin) || double.IsNaN(axYMax) || axXMax == axXMin || axYMax == axYMin || plot.ActualWidth <= 0 || plot.ActualHeight <= 0);
+                }
+                catch { haveAxes = false; }
+
+                // Helper to convert data -> pixel (plot-local)
+                double DataToPixelX(double x)
+                {
+                    if (!haveAxes) return double.NaN;
+                    return (x - axXMin) / (axXMax - axXMin) * plot.ActualWidth;
+                }
+                double DataToPixelY(double y)
+                {
+                    if (!haveAxes) return double.NaN;
+                    // invert Y for screen coordinates
+                    return (1.0 - (y - axYMin) / (axYMax - axYMin)) * plot.ActualHeight;
+                }
+
                 foreach (var p in plottables)
                 {
                     try
@@ -1172,14 +1202,32 @@ namespace TradeMVVM.ReadHoldings
                         // Try to get nearest point using plottable-specific helpers (if available)
                         if (TryGetNearestPointFromPlottable(p, mouseX, out var px, out var py))
                         {
-                            var dx = Math.Abs(px - mouseX);
-                            if (dx < bestDist)
+                            try
                             {
-                                bestDist = dx;
-                                bestX = px;
-                                bestY = py;
-                                bestPlottable = p;
+                                if (haveAxes)
+                                {
+                                    var ppx = DataToPixelX(px);
+                                    var ppy = DataToPixelY(py);
+                                    var dxpix = ppx - pos.X;
+                                    var dypix = ppy - pos.Y;
+                                    var distPix = Math.Sqrt(dxpix * dxpix + dypix * dypix);
+                                    if (distPix < bestDist && distPix <= HoverPixelThreshold)
+                                    {
+                                        bestDist = distPix;
+                                        bestX = px; bestY = py; bestPlottable = p;
+                                    }
+                                }
+                                else
+                                {
+                                    // fallback to X-distance in data-space
+                                    var dx = Math.Abs(px - mouseX);
+                                    if (dx < bestDist)
+                                    {
+                                        bestDist = dx; bestX = px; bestY = py; bestPlottable = p;
+                                    }
+                                }
                             }
+                            catch { }
                             continue;
                         }
 
@@ -1191,13 +1239,26 @@ namespace TradeMVVM.ReadHoldings
                             {
                                 try
                                 {
-                                    var dx = Math.Abs(xs[i] - mouseX);
-                                    if (dx < bestDist)
+                                    if (haveAxes)
                                     {
-                                        bestDist = dx;
-                                        bestX = xs[i];
-                                        bestY = ys[i];
-                                        bestPlottable = p;
+                                        var ppx = DataToPixelX(xs[i]);
+                                        var ppy = DataToPixelY(ys[i]);
+                                        var dxpix = ppx - pos.X;
+                                        var dypix = ppy - pos.Y;
+                                        var distPix = Math.Sqrt(dxpix * dxpix + dypix * dypix);
+                                        if (distPix < bestDist && distPix <= HoverPixelThreshold)
+                                        {
+                                            bestDist = distPix;
+                                            bestX = xs[i]; bestY = ys[i]; bestPlottable = p;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        var dx = Math.Abs(xs[i] - mouseX);
+                                        if (dx < bestDist)
+                                        {
+                                            bestDist = dx; bestX = xs[i]; bestY = ys[i]; bestPlottable = p;
+                                        }
                                     }
                                 }
                                 catch { }
@@ -1207,36 +1268,84 @@ namespace TradeMVVM.ReadHoldings
                     catch { }
                 }
 
-                // Additional fallback: search nearest point by series name -> points mapping
+                // Additional fallback: prefer plot-local SeriesPoints (ChartManager) if available, else use stored name->points map
                 string? nearestSeriesName = null;
                 try
                 {
+                    // get current axis limits to restrict to visible region
+                    double xMin = double.NaN, xMax = double.NaN, yMin = double.NaN, yMax = double.NaN;
+                    try
+                    {
+                        var axes = plot.Plot.Axes;
+                        xMin = axes.Bottom.Min; xMax = axes.Bottom.Max;
+                        yMin = axes.Left.Min; yMax = axes.Left.Max;
+                    }
+                    catch { }
+
                     lock (_seriesPointsByNameLock)
                     {
                         if (_seriesPointsByName != null && _seriesPointsByName.Count > 0)
                         {
+                            bool havePixelTransform = !(double.IsNaN(xMin) || double.IsNaN(xMax) || double.IsNaN(yMin) || double.IsNaN(yMax) || xMax == xMin || yMax == yMin || plot.ActualWidth <= 0 || plot.ActualHeight <= 0);
+
                             foreach (var kv in _seriesPointsByName)
                             {
                                 try
                                 {
-                                    var pXs = kv.Value.Xs;
-                                    var pYs = kv.Value.Ys;
-                                    if (pXs == null || pYs == null) continue;
-                                    int len = Math.Min(pXs.Length, pYs.Length);
-                                    for (int i = 0; i < len; i++)
+                                    var xsArr = kv.Value.Xs;
+                                    var ysArr = kv.Value.Ys;
+                                    if (xsArr == null || ysArr == null) continue;
+                                    int len = Math.Min(xsArr.Length, ysArr.Length);
+
+                                    if (havePixelTransform)
                                     {
-                                        try
+                                        // compute pixel distance to mouse position for points inside visible axis limits
+                                        for (int i = 0; i < len; i++)
                                         {
-                                            var dx = Math.Abs(pXs[i] - mouseX);
-                                            if (dx < bestDist)
+                                            try
                                             {
-                                                bestDist = dx;
-                                                bestX = pXs[i];
-                                                bestY = pYs[i];
-                                                nearestSeriesName = kv.Key;
+                                                var xVal = xsArr[i];
+                                                var yVal = ysArr[i];
+                                                if (xVal < xMin || xVal > xMax) continue;
+                                                if (yVal < yMin || yVal > yMax) continue;
+
+                                                // transform data -> pixel
+                                                double px = (xVal - xMin) / (xMax - xMin) * plot.ActualWidth;
+                                                double py = (1.0 - (yVal - yMin) / (yMax - yMin)) * plot.ActualHeight; // invert Y for screen
+                                                var dxpix = px - pos.X;
+                                                var dypix = py - pos.Y;
+                                                var distPix = Math.Sqrt(dxpix * dxpix + dypix * dypix);
+
+                                                if (distPix < bestDist)
+                                                {
+                                                    // store pixel-distance as bestDist so comparison remains consistent
+                                                    bestDist = distPix;
+                                                    bestX = xVal;
+                                                    bestY = yVal;
+                                                    nearestSeriesName = kv.Key;
+                                                }
                                             }
+                                            catch { }
                                         }
-                                        catch { }
+                                    }
+                                    else
+                                    {
+                                        // fallback to X-distance if we can't compute pixel transform
+                                        for (int i = 0; i < len; i++)
+                                        {
+                                            try
+                                            {
+                                                var dx = Math.Abs(xsArr[i] - mouseX);
+                                                if (dx < bestDist)
+                                                {
+                                                    bestDist = dx;
+                                                    bestX = xsArr[i];
+                                                    bestY = ysArr[i];
+                                                    nearestSeriesName = kv.Key;
+                                                }
+                                            }
+                                            catch { }
+                                        }
                                     }
                                 }
                                 catch { }
@@ -2635,6 +2744,15 @@ namespace TradeMVVM.ReadHoldings
                                         {
                                             _seriesPointsByName[labelText] = (xsTop ?? Array.Empty<double>(), ysTop ?? Array.Empty<double>());
                                         }
+                                        try
+                                        {
+                                            lock (_plottablePointsByObjectLock)
+                                            {
+                                                if (s != null)
+                                                    _plottablePointsByObject[s] = (xsTop ?? Array.Empty<double>(), ysTop ?? Array.Empty<double>());
+                                            }
+                                        }
+                                        catch { }
                                         try { System.Diagnostics.Trace.WriteLine($"SmallPlot: mapped series name='{labelText}' points={xsTop?.Length ?? 0}"); } catch { }
                                     }
                                     catch { }
@@ -2764,6 +2882,11 @@ namespace TradeMVVM.ReadHoldings
                                     var xsTop = item.Points.Select(p => p.t.ToOADate()).ToArray();
                                     var ysTop = item.Points.Select(p => p.v).ToArray();
                                     var s = pltTop.Add.Scatter(xsTop, ysTop);
+                                    lock (_plottablePointsByObjectLock)
+                                    {
+                                        if (s != null)
+                                            _plottablePointsByObject[s] = (xsTop ?? Array.Empty<double>(), ysTop ?? Array.Empty<double>());
+                                    }
                                     try
                                     {
                                         var labelText = !string.IsNullOrWhiteSpace(item.Name) ? item.Name : item.Isin;
